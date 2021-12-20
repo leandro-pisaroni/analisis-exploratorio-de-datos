@@ -1,0 +1,777 @@
+---
+title: \textbf{\huge{Trabajo Práctico 1}}
+subtitle: \huge Análisis de Datos Univariados
+author: "Leandro Pisaroni"
+date: "`r format(Sys.time(), '%d de %B de %Y')`"
+
+output:
+  pdf_document:
+    toc: FALSE #Génera el índice
+    toc_depth: 3 #Cantidad de niveles que muestra el índice
+    number_sections: TRUE #Numera las secciones automáticamente
+
+lang: es-ar #Idioma
+
+header-includes:
+  - \usepackage{lastpage}
+  - \usepackage[labelfont=bf]{caption} #Pone en negrita las etiquetas de las Tablas y Figuras
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhead[L]{\emph{Análisis Exploratorio de Datos}}
+  - \fancyhead[R]{Maestría en Estadística Aplicada}
+  - \fancyfoot{} #Elimina el número de página que por defecto pone RMarkdown
+  - \fancyfoot[L]{\textbf{Trabajo Práctico 1} - Leandro Pisaroni}
+  - \fancyfoot[R]{Página \thepage \hspace{1pt} de \pageref{LastPage}}
+  - \fancypagestyle{plain}{\pagestyle{fancy}}
+  - \renewcommand{\headrulewidth}{0.5pt}
+  - \renewcommand{\footrulewidth}{0.5pt}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r paquetes, include=FALSE}
+library(ggplot2) #Paquetes de gráficos
+library(GGally)
+library(ggridges)
+library(cowplot)
+library(readr) #Paquetes para carga de datos
+library(here)
+library(dplyr) #Paquete para manipulación de datos
+library(tidyr)
+library(ggcleveland) # devtools::install_github("mpru/ggcleveland")
+library(gtools) #Para calcular números combinatorios
+library(nortest) #Tests de normalidad
+library(rsample) #Para obtener muestras bootstrap
+```
+
+# PROBLEMA 1
+## Introducción
+Los datos que se analizan corresponden a un estudio llevado a cabo en el año 2015 en la ciudad de Rosario. El **objetivo primario** de este estudio es obtener información sobre la situación sanitaria asociada a una población vulnerable. Entre los **objetivos secundarios** se planteó *estudiar la situación de anemia por deficiencia de hierro en los niños*. Para ello se registró la hemoglobina (Hb), en g/dL, de cada niño. En particular, interesa *detectar si hay diferencias en el nivel de Hb entre los efectores o centros de salud*.
+
+```{r datos.anemia, include=FALSE}
+datos.anemia <- read_csv(here("anemia.csv"))
+colnames(datos.anemia) <- c("sujeto","Hb","centro")
+```
+
+El grupo de datos está compuesto por un total de `r length(datos.anemia$sujeto)` mediciones de Hb realizadas en 6 centros de salud diferentes de la ciudad. En la Tabla 1 se resumen estas mediciones para cada uno de los efectores.
+
+```{r tabla.resumen.anemia, echo=FALSE}
+tabla.resumen.anemia <- datos.anemia %>% 
+  group_by(centro) %>% 
+  summarise(
+    n = n(),
+    Media = round(mean(Hb),3),
+    SD = round(sd(Hb),3),
+    Mediana = quantile(Hb, .5), 
+    RI = IQR(Hb),
+  )
+knitr::kable(tabla.resumen.anemia, format = "pandoc", align = "c", caption = "Resumen de las mediciones de Hb [g/dL].")
+```
+
+## Distribución de los Datos
+Uno de los objetivos secundarios del estudio plantea detectar, si es que existen, diferencias en los niveles de Hb entre los distintos centros de salud. Para determinar esto se comparan las distribuciones de los resultados obtenidos en las mediciones realizadas en cada efector.
+
+En la Figura \ref{boxplot.anemia} se muestran los boxplots de los niveles de hemoglobina medidos en cada uno de los centros de salud. En la misma se puede observar que, excepto para el Centro de Salud "Martín" (CSM), la distribución de las mediciones es similar para todos los efectores, tanto en posición como en dispersión. Además, estas distribuciones son simétricas (alrededor de aproximadamente 11 o 12 g/dL), lo que también se ve reflejado en la proximidad entre las medias y las medianas de la Tabla 1.
+
+En el caso del CSM, la distribución es asimétrica hacia los niveles más altos de Hb. Es importante tener en cuenta que el número de mediciones realizadas en este centro fue 11 (menos de la mitad que el menor número de mediciones de los restantes efectores) y esto puede estar afectando la forma de la distribución.
+
+\break
+
+```{r boxplot.anemia, echo=TRUE, fig.align = 'center', fig.cap = "Boxplot de las mediciones de Hb para cada centro de salud. \\label{boxplot.anemia}", fig.dim = c(4.5,3)}
+ggplot(datos.anemia, aes(y = Hb, x = centro, fill = centro)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "Centros de Salud", y = "Nivel de Hemoglobina [g/dL]") +
+  theme(legend.position="none")
+```
+
+```{r densidad.anemia, echo=TRUE, fig.align='center', fig.cap="Gráficas de densidad de los niveles de Hb medidos en cada centro de salud. \\label{densidad.anemia}", fig.dim=c(4.5,3), message=FALSE}
+ggplot(datos.anemia, aes(y = centro, x = Hb, fill = centro)) +
+  geom_density_ridges(show.legend = FALSE) +
+  theme_ridges() + 
+  labs(x = "Nivel de Hemoglobina [g/dL]", y = "Centro de Salud")
+```
+
+\break
+
+En la Figura \ref{densidad.anemia} se muestran los gráficos de las densidades de las distribuciones de probabilidad de los niveles de Hb medidos en cada centro de salud. En la misma puede observarse de manera clara la similitud entre las distribuciones de los niveles de Hb de cada efector, de la misma forma que podía apreciarse en los boxplot de la Figura \ref{boxplot.anemia}. Para el Hospital Alberdi, el Centro de Salud "Eva Duarte" (CSED) y el Hospital Escuela Eva Perón (HEEP), los valores externos que se veían en sus respectivos boxplots son los que generan las distintas formas que toman las colas de estas distribuciones.
+
+En el caso del CSM, el gráfico de su densidad muestra una forma irregular y asimétrica hacia los mayores niveles de Hb. En función de esto, no puede considerarse que esta distribución es similar a las demás por el marcado aumento en su dispersión. A pesar de esto, el pico de la distribución parece ser próximo al del resto de los centros de salud. En la Tabla 1, tanto la media como la mediana del CSM son similares al de los demás efectores.
+
+Una forma de evaluar las diferencias que puedan existir entre las distribuciones es a través de un gráfico de percentiles-percentiles (o Q-Q plot). En la Figura \ref{qq.anemia} se muestra el gráfico correspondiente a los datos que se están estudiando.
+
+\vspace{3mm}
+
+```{r qq.anemia, echo=TRUE, fig.align='center', fig.cap="Gráfico de percentiles-percentiles de las mediciones de Hb para cada par de centros de salud. \\label{qq.anemia}", fig.dim=c(6,4), warning=FALSE}
+gg_quantiles(datos.anemia, Hb, centro, size = 0.5, xlabel = "Nivel de Hemoglobina [g/dL]",
+ylabel = "Nivel de Hemoglobina [g/dL]")
+```
+
+En esta figura puede observarse que, excepto para el CSM:
+
+* El Hospital Alberdi y el CSED tienen distribuciones similares para todos los niveles de Hb medidos. Esto mismo también ocurre con el Centro de Salud Nro 11 y el Hospital de Niños "Dr. Victor J. Vilela" (HNV).
+
+* El HEEP, el Centro de Salud Nro 11 y el HNV presentan diferencias con los demás efectores solo para los niveles más altos de Hb. Los percentiles de estas distribuciones son similares para niveles de Hb menores a, aproximadamente, 13 g/dL. Para niveles mayores se ven claras diferencias.
+
+Con respecto al CSM, se puede ver claramente en la Figura \ref{qq.anemia} que los puntos se encuentran alejados de la recta, esto es, que su distribución difiere significativamente de la del resto de los centros de salud. También se observa que para valores cercanos a las medias de las distribuciones estos puntos están próximos a las rectas. Esto mismo fue lo que se apreció en las gráficas de densidad de la Figura \ref{densidad.anemia}.
+
+En **conclusión**, salvo para el CSM, no hay diferencias significativas entre los niveles de Hb de los demás centros de salud. En el caso particular del CSM, la diferencia parece estar en la dispersión de las mediciones y no tanto en el valor central de la distribución de las mismas.
+
+## Ajuste y Residuos
+Teniendo en cuenta la conclusión anterior, si no hay diferencias entre los niveles de Hb de los distintos centros de salud, entonces un modelo que permite explicar la estructura de los datos es:
+
+\begin{center} $y_{ij} = \theta + \varepsilon_{ij}$ \end{center}
+
+en donde:
+
+* $y_{ij}$ representa el *j*-ésimo nivel de Hb (en g/dL) medido en el *i*-ésimo centro de salud.
+
+* $\theta$ es una medida de posición central (media o mediana) general.
+
+* $\varepsilon_{ij}$ es el error aleatorio de la *j*-ésima medición del *i*-ésimo efector.
+
+Por el contrario, si existieran diferencias entre las posiciones centrales de las distribuciones de Hb de los efectores, un modelo que se ajusta mejor es:
+
+\begin{center} $y_{ij} = \theta + \alpha_i + \varepsilon_{ij}$ \end{center}
+
+en donde $\alpha_i$ es el efecto del *i*-ésimo centro de salud. Si se toma $\theta_i = \theta + \alpha_i$, el modelo anterior puede reescribirse como:
+
+\begin{center} $y_{ij} = \theta_i + \varepsilon_{ij}$ \end{center}
+
+Dado que el CSM muestra diferencias con respecto al resto de los centros de salud, se opta por avanzar con este segundo modelo. Además, en función de la presencia de posibles *outliers* y la asimetría de los niveles de Hb de algunos efectores, se selecciona la mediana como medida para describir la localización de las distribuciones.
+
+\vspace{3mm}
+
+``` {r ajuste.anemia, echo = TRUE}
+anemia.ajustado <- datos.anemia %>% 
+  group_by(centro) %>% 
+  mutate(ajuste = median(Hb), res = Hb - ajuste)
+```
+
+De ser bueno este modelo, entonces los residuos deberían tener distribuciones similares. En la Figura \ref{boxplot.ajuste} se muestran los boxplots de los residuos obtenidos al ajustar el modelo anterior. En el mismos puede observarse que los residuos para todos los centros de salud (excepto el CSM) se encuentran centrados alrededor del cero y su dispersión es relativamente similar.
+
+Para comparar las distribuciones de los residuos se construyen QQ plots con los mismos. En lugar de realizar 15 comparaciones de a pares, se grafican los cuantiles de los residuos para los niveles de Hb de cada centro contra los cuantiles de los residuos para todas las mediciones de Hb combinadas, tal como se muestra en la Figura \ref{qq.ajuste}.
+
+En esa figura se puede apreciar que la mayor parte de los puntos de los seis gráficos siguen la línea de pendiente 1 e intercepto 0 que se incluye en cada panel, lo que indica que las distribuciones de los residuos son similares. Las diferencias, cuando se presentan, aparecen para los mayores residuos (los cuales corresponden a los mayores niveles de Hb). En el caso del CSM, estas diferencias se hacen evidentes para los residuos positivos, estos es, para aquellos valores de Hb mayores que la mediana de la distribución y, como se vio antes, estas mediciones presentan una gran dispersión.
+
+En **conclusión**, los residuos no tienen todos la misma distribución y, dado que están centrados, la diferencia se debe a la variabilidad de los mismos.
+
+\break
+
+```{r boxplot.ajuste, echo=TRUE, fig.align='center', fig.cap="Boxplots de los residuos para cada centro de salud. \\label{boxplot.ajuste}", fig.dim=c(4.5,3)}
+ggplot(anemia.ajustado, aes(y = res, x = centro, fill = centro)) + 
+  geom_boxplot(width = 0.5) +
+  coord_flip() +
+  labs(y = "Residuos [g/dL]", x = "Nivel de Hemoglobina [g/dL]") +
+  theme(legend.position="none")
+```
+
+```{r qq.ajuste, echo=TRUE, fig.align='center', fig.cap="QQ plots de los residuos para cada centro de salud. \\label{qq.ajuste}", fig.dim=c(4.5,3)}
+gg_quantiles(anemia.ajustado, res, centro, combined = TRUE, 
+             xlabel = "Cuantiles de los residuos combinados [g/dL]", 
+             ylabel = "Cuantiles de los residuos por efector [g/dL]")
+
+```
+
+\break
+
+### Datos Modificados
+Como el centro de salud que presenta diferencias con el resto parece ser el CSM, se propone repetir el análisis anterior pero sin considerar las mediciones de este efector. De esta forma se puede concluir si los demás centros de salud tienen la misma distribución, como sus datos parecen indicar.
+
+\vspace{3mm}
+
+```{r anemia.modificado, include=FALSE}
+anemia.modificado <- filter(datos.anemia, centro != "Martin")
+anemia.modificado.ajustado <- anemia.modificado %>% 
+  group_by(centro) %>% 
+  mutate(ajuste = median(Hb), res = Hb - ajuste)
+```
+
+En la Figura \ref{boxplot.modificado} y la Figura \ref{qq.modificado} se muestran los boxplots y qq plots de este subconjunto de datos (usando los mismos códigos que antes).
+
+\vspace{3mm}
+
+```{r boxplot.modificado, echo=FALSE, fig.align='center', fig.cap="Boxplots de los residuos para cada centro de salud (menos CSM). \\label{boxplot.modificado}", fig.dim=c(4.5,3)}
+ggplot(anemia.modificado.ajustado, aes(y = res, x = centro, fill = centro)) + 
+  geom_boxplot(width = 0.5) +
+  coord_flip() +
+  labs(y = "Residuos [g/dL]", x = "Nivel de Hemoglobina [g/dL]") +
+  theme(legend.position="none")
+```
+
+\vspace{3mm}
+
+```{r qq.modificado, echo=FALSE, fig.align='center', fig.cap="QQ plots de los residuos para cada centro de salud (menos CSM). \\label{qq.modificado}", fig.dim=c(4.5,3)}
+gg_quantiles(anemia.modificado.ajustado, res, centro, combined = TRUE, 
+             xlabel = "Cuantiles de los residuos combinados [g/dL]", 
+             ylabel = "Cuantiles de los residuos por efector [g/dL]")
+
+```
+
+En estos gráficos puede verse que las distribuciones de los residuos de los cinco centros de salud que se analizan son similares, tanto en localización (Figura \ref{boxplot.modificado}) como en dispersión (Figura \ref{qq.modificado}). En el caso del HEEP y el HNV, las distribuciones de sus residuos se alejan de las demás para valores grandes, pero solo para algunos puntos. Por este motivo se considera que, a pesar de esta diferencia, todos los residuos son homogéneos.
+
+En función del resultado anterior, los residuos pueden ser combinados para explicar la variación de los residuos de cada centro de salud a través de la variación del conjunto completo de residuos. Además, también se facilita el estudio del modelo que se planteó para los datos. En la Figura \ref{rf.ajuste} se muestra el r-f plot de las mediciones de los niveles de Hb de los cinco efectores que se están estudiando.
+
+\vspace{3mm}
+
+```{r rf.ajuste, echo=TRUE, fig.align='center', fig.cap="r-f plot de las mediciones de los cinco centros de salud analizados. \\label{rf.ajuste}", fig.dim=c(4.5,3)}
+gg_rf(anemia.modificado.ajustado, Hb, ajuste, res, 
+      ylabel = "Nivel de Hemoglobina [g/dL]", 
+      cen_fit_label = "Valores ajustados centrados", 
+      res_label = "Residuos")
+```
+
+En la figura anterior se puede observar como el centro de salud explica muy poco o nada la variación que hay en los niveles de Hb. Esto quiere decir que este factor no es influyente en el modelo propuesto.
+
+En **conclusión**, no existen diferencias entre los niveles de Hb medido en los diferentes efectores o centros de salud, excepto con en el CSM.
+
+## Análisis Inferencial
+De manera complementaria al análisis visual anterior, se emplean los siguientes métodos inferenciales para llevar adelante las comparaciones pertinentes:
+
+a. ANOVA.
+
+b. Kruskal-Wallis.
+
+c. Bootstrapping.
+
+### Análisis de la Variancia a un Criterio de Clasificación
+El Análisis del a Variancia (ANOVA) a un Criterio de Clasificación se utiliza para determinar si las medias entre dos o más grupos son similares. El modelo que se plantea es el siguiente:
+
+\begin{center} $y_{ij} = \mu + \alpha_i + \varepsilon_{ij}$ \end{center}
+
+en donde:
+
+* $y_{ij}$ representa el $j$-ésimo nivel de Hb (en g/dL) medido en el $i$-ésimo centro de salud.
+
+* $\mu$ es la media general del modelo.
+
+* $\alpha_i$ es el efecto del $i$-ésimo centro de salud.
+
+* $\varepsilon_{ij}$ es el error aleatorio de la $j$-ésima medición del $i$-ésimo efector, asumiendo que $\varepsilon_{ij} \underset{iid}{\sim} N(0;\sigma^2)$. \break
+
+\vspace{3mm}
+
+```{r anova.anemia, echo=TRUE}
+anova <- aov(Hb~centro, data = datos.anemia)
+anemia.anova <- cbind(datos.anemia,anova$fitted.values,anova$residuals)
+colnames(anemia.anova) <- c("sujeto","Hb","centro","ajuste","residuo")
+```
+
+#### Supuestos del Modelo:
+
+Este modelo se basa en los siguientes supuestos:
+
+1. Las muestras son *independientes* entre sí.
+
+2. Las distribuciones de las poblaciones de las cuales provienen estas muestras son *homocedásticas*.
+
+3. Las poblaciones son *normales*.
+
+Como se desconoce la forma en que fueron obtenidos los datos, se asume que la primera hipótesis se verifica.
+
+En cuanto al segundo supuesto, por medio de la inspección visual de los boxplot de la Figura \ref{boxplot.anemia} se llegó a la conclusión de que las variancias de todos los centros de salud no eran similares. EL CSM mostraba mucha mayor dispersión en las mediciones que el resto. Por lo tanto, no puede suponerse que esta segunda hipótesis se cumpla.
+
+Respecto al supuesto de normalidad, la evaluación del mismo se realiza a través del análisis de los residuos del modelo. En la Figura \ref{normal.anova} se muestra el QQ Normal de los residuos combinados del modelo.
+
+\vspace{3mm}
+
+```{r normal.anova, echo=TRUE, fig.align='center', fig.cap="Gráfico QQ Normal de los residuos del ANOVA para cada centro de salud. \\label{normal.anova}", fig.dim=c(4.5,3)}
+ggplot(anemia.anova, aes(sample = residuo)) +
+stat_qq(size = 0.7) +
+stat_qq_line() +
+labs(x = "Cuantil normal", y = "Residuo [g/dL]")
+```
+
+En la figura anterior puede observarse que la distribución de los residuos del modelo se aproxima bastante bien a la normal, excepto en los extremos de la distribución donde se aprecia que los puntos se separan de la recta. En conclusión, no se verifican todos los supuestos de este modelo. A pesar de eso, se prosigue con la utilización del mismo.
+
+#### Comparación de los Centros de Salud:
+
+Dado que lo que se desea es comparar las distribuciones, y teniendo en cuenta que se está asumiendo que son todas normales y de igual variancia, las diferencias que puedan llegar a existir van a ser todas en la posición de estas distribuciones. Si todas las distribuciones son iguales, entonces van a tener la misma medida de posición central. En términos del modelo, esto se traduce en las siguientes hipótesis:
+
+\hskip 3em $\text{H}_0)\ \alpha_i = 0, \forall i=1,\text{...},6.$
+
+\hskip 3em $\text{H}_1)\ \text{Al menos un } \alpha_i \text{ no nulo.}$
+
+Para evaluar estas hipótesis se construye el cuadro ANOVA que se muestra en la Tabla 2.
+
+```{r tabla.anova, echo=FALSE}
+modelo.anova <- lm(Hb~centro, data = datos.anemia)
+tabla.anova <- anova(modelo.anova)
+
+colnames(tabla.anova) <- c("Grados de Libertad", "Suma de Cuadrados", "Cuadrados Medios", "Estadística F", "Valor p")
+rownames(tabla.anova) <- c("Centros", "Residuos")
+options(knitr.kable.NA = "")
+knitr::kable(tabla.anova, format = "pandoc", align = "c", caption = "Tabla ANOVA para las mediciones de Hb de los centros de salud.")
+```
+
+De acuerdo a los valores de esta tabla, el estadístico de la prueba es $F =$ `r round(tabla.anova$'Estadística F'[1],3)` y su probabilidad asociada resulta valor p = `r round(tabla.anova$'Valor p'[1],4)`. En función de estos resultados, se rechaza la hipótesis nula de igualdad de medias en favor de la alternativa. Es decir, al menos una de las medias de las distribuciones de los niveles de Hb de los centros de salud es diferente al resto.
+
+A partir de la Tabla 2 se puede concluir que había diferencias entre las medias de las distribuciones, pero no especifica cuál o cuáles de ellas son las que difieren. Para poder determinar esto se pueden utilizar métodos de comparación múltiples, como la Prueba de Tukey. En la Tabla 3 se muestran los valores obtenidos por medio de esta prueba para las mediciones analizadas.
+
+\vspace{3mm}
+
+```{r tukey, echo=TRUE}
+tukey.anemia <- TukeyHSD(anova)
+```
+
+```{r tabla.tukey, echo=FALSE}
+#Tabla vacía
+tabla.tukey <- data.frame(rep(NA,15),rep(NA,15),rep(NA,15),rep(NA,15),rep(NA,15))
+
+#Nombres
+colnames(tabla.tukey) <- c("Comparaciones", "Diferencia", "Límite Inferior", "Límite Superior", "Valor p")
+
+
+#Valores
+for (i in 1:15) {
+  for (j in 1:4) {
+    tabla.tukey[i,j+1] <- tukey.anemia$centro[i,j]
+  }
+}
+tabla.tukey[,1] <- rownames(tukey.anemia$centro)
+
+#Tabla
+knitr::kable(tabla.tukey, format = "pandoc", align = "c", caption = "Comparaciones múltiples de las medias de las niveles de Hb de los centros de Salud.")
+```
+
+En la tabla anterior se puede ver que los intervalos cuya diferencia no contiene al cero, o bien aquellos cuyo valor p es menor que 0.05, son los que corresponden a las comparaciones entre el CSM y los demás centros de salud. También resulta significativa la diferencia entre el HNV y el HEEP.
+
+En **conclusión**, las distribuciones de los niveles de Hb medidos en los efectores son similares, excepto para el CSM.
+
+### Prueba de Kruskal-Wallis
+La Prueba de Kruskal-Wallis se utiliza para ensayar si un grupo de poblaciones tienen igual medida de posición central.
+
+#### Supuestos del Modelo:
+
+Esta prueba se basa en los siguientes supuestos:
+
+1. Las muestras se seleccionan al *azar* de las poblaciones que representan y son *independientes* entre sí.
+
+2. La variable que se estudia es *continua*.
+
+3. Las distribuciones de las poblaciones son *idénticas en forma*.
+
+Nuevamente se asume que la primera hipótesis se verifica. En cuanto al segundo supuesto, el mismo también se cumple: la variable estudiada es el nivel de hemoglobina (medido en g/dL), la cual es una variable continua.
+
+Respecto a la tercera hipótesis, en los análisis anteriores se pudo concluir que, excepto para el CSM, las distribuciones de todas las mediciones eran similares. Como el único efector para el cual este supuesto no se verifica es el CSM, se podría optar por llevar adelante la prueba sin este centro de salud. De esa forma se verificarían las tres hipótesis sobre la cual está construido el test, pero no se podría concluir respecto del CSM.
+
+Teniendo presente que el último supuesto no se verifica para todas las muestras, se lleva adelante la prueba de todas maneras.
+
+#### Comparación de los Centros de Salud:
+
+Las hipótesis que se ponen a prueba en este test son:
+
+\hskip 3em $\text{H}_0)\ \theta_1 = \theta_2 = \theta_3 = \theta_4 = \theta_5 = \theta_6$.
+
+\hskip 3em $\text{H}_1)\ \text{Al menos un } \theta_i \text{ distinto.}$
+
+en donde $\theta_i$ representa la mediana de las mediciones del centro de salud $i$, con $i=1,\text{...},6$.
+
+\vspace{3mm}
+
+```{r kruskal.test, echo=FALSE}
+kruskal.anemia <- kruskal.test(Hb ~ centro, data = datos.anemia)
+```
+
+El estadístico de la prueba es:
+
+\begin{center} $\displaystyle H = \frac{12}{321\cdot (321 + 1)} \sum_{i=1}^{6} \left [\frac{\sum R_i}{n_i}  \right ] - 3 \cdot(321 +1) = $ `r round(kruskal.anemia$statistic,3)` \end{center}
+
+siendo $\sum R_i$ la suma de los rangos de las mediciones del grupo $i$ y $n_i$ el número de mediciones de ese mismo grupo. Bajo la hipótesis nula de igualdad de medianas, esta estadística tiene una distribución $\chi^2$ con `r kruskal.anemia$parameter` grados de libertad y su valor de probabilidad asociada es:
+
+\begin{center} valor p = `r round(kruskal.anemia$p.value,4)` \end{center}
+
+En función del valor p anterior, y para un nivel de significación del 5%, se rechaza la hipótesis nula y se concluye que al menos una de las medianas es significativamente diferente a las demás. Es decir, alguna (o algunas) de las distribuciones de los niveles de Hb es distinta al resto.
+
+#### Datos Modificados:
+
+La prueba anterior permite asegurar que no todas las medianas son iguales, pero no determina cuál (o cuáles) de ellas es la que difiere. Para eso se podrían realizar pruebas de comparación de a pares, en donde cada mediana se compara con el resto. Esto implicaría llevar a cabo `r nrow(combinations(6,2))` pruebas.
+
+Como en el análisis visual de los datos se observó que la distribución del CSM es la que se aparenta ser diferente al resto, se propone como alternativa repetir el test pero sin utilizar los datos de este centro de salud. Las hipótesis siguen siendo las mismas (con la única diferencia que se tiene una mediana menos, la del CSM).
+
+```{r kruskal.test.2, echo=FALSE}
+kruskal.modificado <- kruskal.test(Hb ~ centro, data = anemia.modificado)
+```
+
+El estadístico de la prueba resulta $H =$ `r round(kruskal.modificado$statistic,3)`, el cual, bajo $\text{H}_0$ tiene una distribución $\chi^2$ con `r kruskal.modificado$parameter` grados de libertad. El valor de probabilidad asociada a esta nueva estadística es valor p = `r round(kruskal.modificado$p.value,4)`. Como el mismo es mayor que 0.05 (e inclusive que 0.1), se concluye que no se rechaza la hipótesis nula en favor de la alternativa. Esto es, se puede considerar que las medianas de las distribuciones son iguales.
+
+En **conclusión**, las distribuciones de los niveles de Hb medidos en los efectores son similares, excepto para el CMS.
+
+### Bootstrapping
+Bootstrapping es una técnica no paramétrica que permite realizar inferencias a partir de la estimación de las distribuciones muestrales de estadísticos basados en el remuestreo con reposición de los datos recolectados.
+
+Para la comparación de múltiples medias, se puede recurrir a un ANOVA a un Criterio de Clasificación como el que se explicó anteriormente. El estadístico *F* que se utiliza para evaluar este modelo se puede construir por medio de bootstrap de la siguiente manera:
+
+**1.** Dadas las $k = 6$ muestras de mediciones de Hb $\boldsymbol{z_1}, \boldsymbol{z_2}, \text{...}, \boldsymbol{z_6}$ se calculan:
+
+\begin{center} $\widetilde{z}_{ij} = z_{ij} - \overline{z}_i + \overline{x}$ \end{center}
+
+en donde $z_{ij}$ es la *j*-ésima medición del *i*-ésimo centro salud, $\overline{z}_i$ es la media de los niveles de Hb del *i*-ésimo efector y $\overline{x}$ es la media de la muestra combinada.
+
+\vspace{3mm}
+
+```{r bootstrap.datos, echo=TRUE}
+# Filtrado de cada muestra
+z1 <- filter(datos.anemia, centro == "Alberdi")
+z1 <- z1$Hb
+z2 <- filter(datos.anemia, centro == "Eva Duarte")
+z2 <- z2$Hb
+z3 <- filter(datos.anemia, centro == "HEEP")
+z3 <- z3$Hb
+z4 <- filter(datos.anemia, centro == "Martin")
+z4 <- z4$Hb
+z5 <- filter(datos.anemia, centro == "N. 11")
+z5 <- z5$Hb
+z6 <- filter(datos.anemia, centro == "Vilela")
+z6 <- z6$Hb
+x <- c(z1,z2,z3,z4,z5,z6)
+
+# Corrección de las medidas
+z1.rulo <- data.frame(z1 - mean(z1) + mean(x))
+names(z1.rulo) <- "z1.rulo"
+z2.rulo <- data.frame(z2 - mean(z2) + mean(x))
+names(z2.rulo) <- "z2.rulo"
+z3.rulo <- data.frame(z3 - mean(z3) + mean(x))
+names(z3.rulo) <- "z3.rulo"
+z4.rulo <- data.frame(z4 - mean(z4) + mean(x))
+names(z4.rulo) <- "z4.rulo"
+z5.rulo <- data.frame(z5 - mean(z5) + mean(x))
+names(z5.rulo) <- "z5.rulo"
+z6.rulo <- data.frame(z6 - mean(z6) + mean(x))
+names(z6.rulo) <- "z6.rulo"
+```
+
+**2.** A partir de cada vector $\boldsymbol{\widetilde{z}_i}$ se construyen *B* muestras $\boldsymbol{z_i^*}$ bootstrap. Al conjunto de todas estas muestras se lo denota por $\boldsymbol{x^*}$
+
+\vspace{3mm}
+
+```{r bootstrap.muestras, echo=TRUE}
+# Número de muestras bootstrap
+B <- 1000
+
+# Construcción de las muestras
+z1.estrella <- bootstraps(z1.rulo, times = B)
+z2.estrella <- bootstraps(z2.rulo, times = B)
+z3.estrella <- bootstraps(z3.rulo, times = B)
+z4.estrella <- bootstraps(z4.rulo, times = B)
+z5.estrella <- bootstraps(z5.rulo, times = B)
+z6.estrella <- bootstraps(z6.rulo, times = B)
+```
+
+**3.** Utilizando estas muestras se calcula el estadístico *F* para evaluar la hipótesis nula de igualdad de medias a partir de las siguientes expresiones:
+
+\begin{center} $SCE = \displaystyle \sum_{i=1}^{6} n_i \left (\overline{z}_i^* - \overline{x}^* \right )^2$ \end{center}
+
+\begin{center} $SCR = \displaystyle \sum_{i=1}^{6} \sum_{j=1}^{n_i} \left (z_{ij}^* - \overline{z}_i^* \right )^2$ \end{center}
+
+\begin{center} $F (\boldsymbol{x^*}) = \frac{321-6}{6-1}\frac{SCE}{SCR}$ \end{center}
+
+en donde $n_i$ es el número de mediciones del *i*-ésimo centro de salud.
+
+\vspace{3mm}
+
+```{r bootstrap.f, echo=TRUE}
+# Calculo los SCE y los SCR
+SCE <- NA
+SCR <- NA
+
+for (i in 1:B) {
+  z.1 <- as.data.frame(z1.estrella$splits[[i]])
+  z.2 <- as.data.frame(z2.estrella$splits[[i]])
+  z.3 <- as.data.frame(z3.estrella$splits[[i]])
+  z.4 <- as.data.frame(z4.estrella$splits[[i]])
+  z.5 <- as.data.frame(z5.estrella$splits[[i]])
+  z.6 <- as.data.frame(z6.estrella$splits[[i]])
+  
+  x.estrella <- c(z.1$z1.rulo, z.2$z2.rulo, z.3$z3.rulo, z.4$z4.rulo, z.5$z5.rulo,
+                  z.6$z6.rulo)
+  
+  aux.sce <-  length(z.1$z1.rulo)*(mean(z.1$z1.rulo)-mean(x.estrella))^2 +
+              length(z.2$z2.rulo)*(mean(z.2$z2.rulo)-mean(x.estrella))^2 +
+              length(z.3$z3.rulo)*(mean(z.3$z3.rulo)-mean(x.estrella))^2 +
+              length(z.4$z4.rulo)*(mean(z.4$z4.rulo)-mean(x.estrella))^2 +
+              length(z.5$z5.rulo)*(mean(z.5$z5.rulo)-mean(x.estrella))^2 +
+              length(z.6$z6.rulo)*(mean(z.6$z6.rulo)-mean(x.estrella))^2
+  
+  SCE <- c(SCE,aux.sce)
+  
+  SCR1 <- 0
+  SCR2 <- 0
+  SCR3 <- 0
+  SCR4 <- 0
+  SCR5 <- 0
+  SCR6 <- 0
+  
+  for (j in 1:length(z.1$z1.rulo)) {
+    SCR1 <- SCR1 + (z.1$z1.rulo[j] -mean(z.1$z1.rulo))^2
+  }
+  
+  for (j in 1:length(z.2$z2.rulo)) {
+    SCR2 <- SCR2 + (z.2$z2.rulo[j] -mean(z.2$z2.rulo))^2
+  }
+  
+  for (j in 1:length(z.3$z3.rulo)) {
+    SCR3 <- SCR3 + (z.3$z3.rulo[j] -mean(z.3$z3.rulo))^2
+  }
+  
+  for (j in 1:length(z.4$z4.rulo)) {
+    SCR4 <- SCR4 + (z.4$z4.rulo[j] -mean(z.4$z4.rulo))^2
+  }
+  
+  for (j in 1:length(z.5$z5.rulo)) {
+    SCR5 <- SCR5 + (z.5$z5.rulo[j] -mean(z.5$z5.rulo))^2
+  }
+  
+  for (j in 1:length(z.6$z6.rulo)) {
+    SCR6 <- SCR6 + (z.6$z6.rulo[j] -mean(z.6$z6.rulo))^2
+  }
+  
+  aux.scr <- SCR1 + SCR2 + SCR3 + SCR4 + SCR5 + SCR6
+  SCR <- c(SCR,aux.scr)
+}
+
+SCE <- SCE[-1]
+SCR <- SCR[-1]
+
+# Calculo el vector de estadísticos
+F.boot <- (SCE/5)/(SCR/315)
+```
+
+**4.** A partir del vector de estadísticas anterior, se estima el *valor p* (*ASL*) por medio de la expresión:
+
+\begin{center} $\widehat{ASL}_{boot} = \frac{1}{B}\# \{F (\boldsymbol{x^*}) \geq  F_{obs}\}$ \end{center}
+
+en donde $F_{obs} = F(\boldsymbol{x})$.
+
+\vspace{3mm}
+
+```{r bootstrap.valorp, echo=TRUE}
+F.obs <- tabla.anova$`Estadística F`[1] #Ya fue calculado con el ANOVA.
+
+contador <- 0
+
+for (i in 1:B) {
+  if (F.boot[i] > F.obs) {
+    contador <- contador + 1
+  }
+}
+
+asl <- contador/B
+```
+
+Como se obtiene que $\widehat{ASL}_{boot} =$ `r asl`, se **concluye** que hay diferencias entre las medias de los diferentes centros de salud.
+
+## Conclusión
+Luego de graficar y analizar visualmente las mediciones de Hb de los distintos centros de salud y efectores, y de aplicar técnicas de inferencia estadística, se puede concluir que los niveles de Hb en al menos uno de los centros de salud estudiados es diferente al resto. Más aun, también se pudo verificar que el efector que era difería de los demás era el CSM.
+
+\break
+
+# PROBLEMA 2
+## Introducción
+Los datos que se analizan corresponden a una selección de *song features* sobre Charly García tomadas del portal de Spotify para desarrolladores. El **objetivo** de este estudio es *realizar una análisis descriptivo de las canciones de los discos seleccionados* para de esta forma *detectar si hay diferencias en la posición de las distribuciones de las características bajo estudio*.
+
+```{r datos.charly, include=FALSE}
+datos.charly <- read_delim(here("charly.txt"), "\t", escape_double = FALSE, trim_ws = TRUE)
+año <- c(rep(1982,8), rep(1987,10), rep(1990,11), rep(1996,14),rep(2002,13), rep(2017,10))
+datos.charly <-cbind(datos.charly,año)
+```
+
+El grupo de datos está compuesto por un total de `r length(datos.charly$disco)` mediciones de Hb realizadas en 6 centros de salud diferentes de la ciudad. En la Tabla 4 se resumen los discos que se analizan.
+
+\vspace{3mm}
+
+```{r tabla.resumen.charly, echo=FALSE}
+tabla.resumen.charly <- datos.charly %>% 
+  group_by(disco) %>% 
+  summarise(
+    Año = mean(año),
+    "Nro de Canciones" = n(),
+  )
+knitr::kable(tabla.resumen.charly, format = "pandoc", align = "c", caption = "Resumen de los discos estudiados.")
+```
+
+## Distribución de los Datos
+Para poder analizar los distintos aspectos relacionados con las canciones, se dividen las variables en grupos. De esta forma se facilita el estudio del comportamiento de las mismas al reunirlas en conjuntos según relaciones que pueden establecerse entre la característica que describe cada variable.
+
+### Grupo 1: Aspectos relacionados con la Composición
+Este grupo incluye a las variables *mode* (modo), *key* (tonalidad), *tempo* y *time signature* (tiempo del compás). Estas características pueden pensarse más ligadas con los aspectos técnicos de la composición del sonido y por eso se las reúne en un mismo grupo.
+
+Las Figuras \ref{charly.grupo11}, \ref{charly.grupo12} y \ref{charly.grupo13} describen el comportamiento de estas variables en los discos seleccionados.
+
+\vspace{3mm}
+
+```{r charly.grupo11, fig.align='center', fig.cap="Diagrama de puntos de la variable Key y boxplot de la variable Templo. \\label{charly.grupo11}", fig.height=4, warning=FALSE, , echo=TRUE, message=FALSE}
+bp12 <- ggplot(datos.charly, aes(y = key, x = reorder(disco, año), fill = disco)) + 
+  geom_dotplot(binaxis='y', stackdir='center') +
+  coord_flip() +
+  labs(x = "", y = "Key") +
+  theme(legend.position="none")
+bp13 <- ggplot(datos.charly, aes(y = tempo, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Tempo [pulsos/min]") +
+  theme(legend.position="none",axis.text.y=element_blank())
+plot_grid(bp12, bp13, labels = "", rel_widths = c(1.85, 1))
+```
+
+```{r charly.grupo12, fig.align = 'center', fig.cap = "Diagrama de puntos de la variable Modo por disco. \\label{charly.grupo12}", fig.height=4, warning=FALSE, , echo=TRUE, message=FALSE}
+ggplot(datos.charly, aes(y = mode, x = reorder(disco, año), fill = disco)) + 
+  geom_dotplot(binaxis='y', stackdir='center', binwidth = 0.05) +
+  coord_flip() +
+  facet_wrap(~disco) +
+  labs(x = "", y = "Mode") +
+  theme(legend.position="none")
+```
+
+En la Figura \ref{charly.grupo11} puede observarse que en los discos analizados la dispersión de la variable *key* es grande, es decir, Charly García hace uso diferentes tonos para componer sus canciones. En cambio, para la variable *tempo*, si bien la variabilidad cambia de disco a disco, todos los valores centrales se encuentran próximos a 110 pulsos/min.
+
+Respecto al *modo*, la Figura \ref{charly.grupo12} muestra una clara preferencia de Charly García por el modo mayor sobre el menor.
+
+\vspace{3mm}
+
+```{r charly.grupo13, fig.align = 'center', fig.cap = "Diagrama de puntos de la variable Time Signature por disco. \\label{charly.grupo13}", fig.height=4, warning=FALSE, , echo=TRUE, message=FALSE}
+ggplot(datos.charly, aes(y = time_signature, x = reorder(disco, año), fill = disco)) + 
+  geom_dotplot(binaxis='y', stackdir='center', binwidth = 0.05) +
+  coord_flip() +
+  facet_wrap(~disco) +
+  labs(x = "", y = "Time Signature") +
+  theme(legend.position="none")
+```
+
+Finalmente, en la Figura \ref{charly.grupo13} se aprecia que el artista utiliza casi con exclusividad un *time signature* de 4 pulsos con compás en todos sus álbumes. Solamente en una canción del disco *Influencia* el tiempo del compás disminuye de 4 a 3 pulsos por compás.
+
+En **conclusión**, en cuanto a su composición, Charly García utiliza diferentes tonos para componer (en su mayoría en modo mayor), pero mantiene compases de 4 pulsos y tempos medios de 110 pulsos/minuto.
+
+### Grupo 2: Aspectos relacionados con el Estilo
+En este grupo se encuentran las variables *danceability* (bailabilidad), *energy* (energía), *loudness* (volumen) y *valence* (positividad). Estas características pueden pensarse relacionadas con el estilo musical de Charly García y por eso se las reúne en un mismo grupo. En la Figuras \ref{charly.grupo2} se grafica el comportamiento de estas variables en los discos seleccionados.
+
+\vspace{3mm}
+
+```{r charly.grupo2, echo=TRUE, fig.align = 'center', fig.cap = "Boxplot de las variables del grupo 2 para ccada álbum. \\label{charly.grupo2}", fig.height=4}
+bp21 <- ggplot(datos.charly, aes(y = danceability, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Danceability") +
+  theme(legend.position="none")
+bp22 <- ggplot(datos.charly, aes(y = energy, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Energy") +
+  theme(legend.position="none",axis.text.y=element_blank())
+bp23 <- ggplot(datos.charly, aes(y = loudness, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Loudness") +
+  theme(legend.position="none")
+bp24 <- ggplot(datos.charly, aes(y = valence, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Valence") +
+  theme(legend.position="none",axis.text.y=element_blank())
+plot_grid(bp21, bp22, bp23, bp24,labels = "", rel_widths = c(1.85, 1))
+```
+
+En la figura anterior puede observarse que:
+
+* En cuanto ala variable *danceability*, no parecen haber ningún tipo de patrón distintivo en los discos analizados.
+
+* Las variables *energy* y *loudness* tampoco aparentan seguir algún comportamiento similar, más allá de que ambas características muestran las mayores dispersiones dentro de este segundo grupo.
+
+* Finalmente, respecto de *loudness*, al contrario de lo que sucede con las dos variables anteriores, este aspecto tiene en general muy poca variabilidad.
+
+En **conclusión**, en cuanto a las variables de este grupo, el artista no se limita a un único estilo de composición de su música sino que juega con la misma para producir discos mutando a lo largo de su carrera.
+
+### Grupo 3: Aspectos relacionados con el Tipo de Sonido
+Este grupo contiene a las variables *speechiness* (habla), *instrumentalness* (instrumentalidad), *liveness* (en vivo) y *acousticness* (acústico). Estas características pueden pensarse relacionadas con el tipo de sonido que produce Charly García y por eso se las reúne en un mismo grupo. En la Figura \ref{charly.grupo3} se grafica el comportamiento de estas variables en los discos seleccionados.
+
+\vspace{3mm}
+
+```{r charly.grupo3, echo=TRUE, fig.align = 'center', fig.cap = "Boxplot de las variables del grupo 3 para cada álbum. \\label{charly.grupo3}", fig.height=4}
+bp31 <- ggplot(datos.charly, aes(y = speechiness, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Speechiness") +
+  theme(legend.position="none")
+bp32 <- ggplot(datos.charly, aes(y = instrumentalness, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Instrumentalness") +
+  theme(legend.position="none",axis.text.y=element_blank())
+bp33 <- ggplot(datos.charly, aes(y = liveness, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Liveness") +
+  theme(legend.position="none")
+bp34 <- ggplot(datos.charly, aes(y = acousticness, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Acousticness") +
+  theme(legend.position="none",axis.text.y=element_blank())
+plot_grid(bp31, bp32, bp33, bp34,labels = "", rel_widths = c(1.85, 1))
+```
+
+En la figura anterior puede observarse que:
+
+* La distribución de la variable *speechiness* en los diferentes álbumes tiene, en su mayoría, poca dispersión y se encuentra centrada en valores bajos.
+
+* Respecto de *instrumentalness*, excepto por el disco *Say no more*, la distribución de esta variable en los demás álbumes está centrada en valores muy próximos al cero. Esto implica que en sus canciones Charly García no compone canciones con compases puramente instrumentales excesivamente largos, sino que prefiere acompañar su música con líricas.
+
+* En cuanto a *liveness*, la distribución de la misma varía de un disco a otro, tanto en posición como en localización. 
+
+* Por último, la variable *acousticness* no parece mostrar ningún tipo de patrón distintivo en los discos analizados.
+
+En **conclusión**, las canciones de Charly García contienen en gran parte su voz como acompañamiento de la música que compone. Además, excepto en los discos *Yendo de la cama al living* e *Influencia*, el artista hace muy poco uso de palabra hablada en las canciones de los discos restantes analizados.
+
+### Grupo 4: Duración de las Cancicones
+El último grupo estaría compuesto únicamente por la variable *duración de las canciones* (en milisegundos). Se decidió estudiar esta característica por separado por dos razones:
+
+1. No existen motivos para asumir *a priori* que esta variable esté relacionada con alguna de las demás.
+
+2. A diferencia de las variables de los dos grupos anteriores, la duración no es adimensional sino que está expresada en unidades de tiempo.
+
+En la Figura \ref{charly.grupo4} se presenta el boxplot del tiempo que duran las canciones de cada disco, en milisegundos. En la misma se puede ver que, excepto para *Say no more*, la dispersión de las canciones anteriores aparenta tener similitudes. Para comprobar esto se ajusta cada una de la duración de las canciones de los demás discos restándole la mediana de las muestras. Se obtienen así los boxplot de la Figura \ref{charly.tiempo.boxplot}.
+
+\vspace{3mm}
+
+```{r charly.grupo4, echo=TRUE, fig.align = 'center', fig.cap = "Boxplot de la duración de las canciones (en ms) para cada álbum. \\label{charly.grupo4}", fig.dim = c(4.5,3)}
+ggplot(datos.charly, aes(y = duration_ms, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Duración de las Cancicones [ms]") +
+  scale_y_continuous(labels = scales::comma) +
+  theme(legend.position="none")
+```
+
+``` {r charly.tiempo, echo = TRUE}
+charly.tiempo <- filter(datos.charly, disco != "Say no more")
+charly.tiempo <- charly.tiempo %>% 
+  group_by(disco) %>% 
+  mutate(ajuste = median(duration_ms), res = duration_ms - ajuste)
+
+```
+
+\vspace{3mm}
+
+``` {r charly.tiempo.boxplot, echo = TRUE, fig.align = 'center', fig.cap = "Boxplot de los residuos para cada álbum. \\label{charly.tiempo.boxplot}", fig.dim = c(4.5,3)}
+ggplot(charly.tiempo, aes(y = res, x = reorder(disco, año), fill = disco)) + 
+  geom_boxplot(varwidth = TRUE) +
+  coord_flip() +
+  labs(x = "", y = "Residuos [ms]") +
+  scale_y_continuous(labels = scales::comma) +
+  theme(legend.position="none")
+```
+En esta última figura se logra ver que hay diferencias en la distribución de los residuos y que no tienen todos la misma variabilidad. Con los QQ plots de la Figura \ref{charly.tiempo.qq} se termina de confirmar que, por ejemplo, el disco *Influencia* tiene distinta dispersión que el resto.
+
+``` {r charly.tiempo.qq, echo = TRUE, fig.align = 'center', fig.cap = "QQ plots de los residuos para cada álbum. \\label{charly.tiempo.qq}", fig.dim = c(4.5,3)}
+gg_quantiles(charly.tiempo, res, disco, combined = TRUE, 
+             xlabel = "Cuantiles de los residuos combinados [ms]", 
+             ylabel = "Cuantiles de los residuos por efector [ms]")
+
+```
+
+En **resumen**, si bien la dispersión de las duraciones de las canciones varía entre los diferentes discos, en general la mayoría de estos tiempos se concentrar alrededor de los 200-250 segundos.
+
+## Conclusión
+A partir del análisis visual de las diferentes características de distintos discos de la carrera musical de Charly García se puede concluir que la gran variabilidad que presentan las distribuciones de los *song features* de las canciones de estos álbumes hablan de la versatilidad y creatividad del artista como cantante y compositor.

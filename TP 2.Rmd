@@ -1,0 +1,588 @@
+---
+title: \textbf{\huge{Trabajo Práctico 2}}
+subtitle: \huge Análisis de Datos Bivariados
+author: "Leandro Pisaroni"
+date: "`r format(Sys.time(), '%d de %B de %Y')`"
+
+output:
+  pdf_document:
+    toc: FALSE #Génera el índice
+    toc_depth: 3 #Cantidad de niveles que muestra el índice
+    number_sections: TRUE #Numera las secciones automáticamente
+
+lang: es-ar #Idioma
+
+header-includes:
+  - \usepackage{lastpage}
+  - \usepackage[labelfont=bf]{caption} #Pone en negrita las etiquetas de las Tablas y Figuras
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhead[L]{\emph{Análisis Exploratorio de Datos}}
+  - \fancyhead[R]{Maestría en Estadística Aplicada}
+  - \fancyfoot{} #Elimina el número de página que por defecto pone RMarkdown
+  - \fancyfoot[L]{\textbf{Trabajo Práctico 2} - Leandro Pisaroni}
+  - \fancyfoot[R]{Página \thepage \hspace{1pt} de \pageref{LastPage}}
+  - \fancypagestyle{plain}{\pagestyle{fancy}}
+  - \renewcommand{\headrulewidth}{0.5pt}
+  - \renewcommand{\footrulewidth}{0.5pt}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r paquetes, include=FALSE}
+library(MASS) #Cargar antes de dplyr -> Ajustes Robustos
+library(ggplot2) #Paquetes de gráficos
+library(ggrepel)
+#library(GGally)
+#library(ggridges)
+library(cowplot)
+library(gganimate)
+library(readr) #Paquetes para carga de datos
+library(here)
+library(dplyr) #Paquete para manipulación de datos
+library(tidyr)
+library(broom)
+library(ggcleveland) # devtools::install_github("mpru/ggcleveland")
+library(robust) #Estimación robusta
+```
+
+# PROBLEMA 1
+## Introducción
+Los datos que se analizan corresponden a un estudio sobre el proceso de degradación química de una solución medicamentosa cuya etiqueta informaba que la concentración del principio activo era de 1.5 %. El **objetivo** del estudio era *caracterizar el comportamiento de la concentración del principio activo en función del tiempo*.
+
+```{r datos.cinetica, include=FALSE}
+datos.cinetica <- read_delim(here("cc.txt"), "\t", escape_double = FALSE, trim_ws = TRUE)
+#colnames(datos.anemia) <- c("sujeto","Hb","centro")
+```
+
+El grupo de datos está compuesto por un total de `r length(datos.cinetica$tiempo)` mediciones de la concentración del principio activo de la solución realizadas durante 25 días. En la Tabla 1 se resumen estas mediciones.
+
+\vspace{3mm}
+
+```{r tabla.resumen.cinetica, echo=FALSE}
+tabla.resumen.cinetica <- datos.cinetica %>% 
+  summarise(
+    n = n(),
+    Min = min(cc),
+    Max = round(max(cc),3),
+    Media = round(mean(cc),3),
+    SD = round(sd(cc),3),
+    Mediana = quantile(cc, .5), 
+    RI = round(IQR(cc),3),
+  )
+knitr::kable(tabla.resumen.cinetica, format = "pandoc", align = "c", caption = "Resumen de las mediciones de la concentración [%] del principio activo.")
+```
+
+Como el experimento comenzó un tiempo después de que el medicamento fue elaborado, en la primera medición (la correspondiente al día cero) se obtuvo un valor de concentración igual a 1.240%.
+
+## Distribución de los Datos
+Para poder caracterizar el comportamiento de la concentración del principio activo del medicamento a medida que transcurre el tiempo se construye el diagrama de dispersión de la Figura \ref{scatterplot.cinetica}.
+
+\vspace{3mm}
+
+```{r scatterplot.cinetica, echo=TRUE, fig.align = 'center', fig.cap = "Concentración del principio activo en función del día. \\label{scatterplot.cinetica}", fig.dim = c(5,3.33)}
+ggplot(datos.cinetica, aes(x = tiempo, y = cc)) +
+  geom_point() +
+  labs(x = "Día", y = "Concentración [%]")
+```
+
+En este gráfico puede observarse, lo que en principio, parece ser una marcada relación lineal decreciente entre la concentración del principio activo y el tiempo. En el gráfico de la Figura \ref{scatterplot.cinetica.2} se incluye una recta de regresión lineal que refuerza la idea de linealidad de la relación entre estas variables.
+
+\vspace{3mm}
+
+```{r scatterplot.cinetica.2, echo=TRUE, fig.align = 'center', fig.cap = "Concentración del principio activo en función del día con una recta ajustada a los datos. \\label{scatterplot.cinetica.2}", fig.dim = c(5,3.33), message=FALSE}
+ggplot(datos.cinetica, aes(x = tiempo, y = cc)) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE) +
+  labs(x = "Día", y = "Concentración [%]")
+```
+
+## Clasificación del Proceso de Degradación
+Según la **Ley de Velocidad** de la *Cinética Química*, la concentración del principio activo (*C*) en el medicamento disminuye con el tiempo (*t*) según la ecuación diferencial
+
+\begin{center} $\displaystyle \frac{dC}{dt} = kC^n$ \end{center} 
+
+donde *k* es una constante empírica que se denomina *constante de velocidad*. El **orden** de este proceso será el exponente *n* de la concentración en la expresión anterior.
+
+### Proceso de Orden 0
+Si el proceso de degradación es de **orden 0**, la ecuación que lo describe es
+
+\begin{center} $C_t = C_0 - kt$ \end{center} 
+
+siendo $C_0$ la *concentración inicial* del principio activo. El gráfico de la Figura \ref{scatterplot.cinetica.2} muestra la representación gráfica de este tipo de proceso.
+
+Para evaluar la calidad del ajuste de este modelo se construye el gráfico de dependencia de residuos de la Figura \ref{residuos.orden.0}.
+
+\vspace{3mm}
+
+```{r modelo.orden.0, echo=TRUE}
+modelo.orden.0 <- lm(cc~tiempo, data = datos.cinetica) %>% augment()
+```
+
+```{r residuos.orden.0, echo=TRUE, fig.align = 'center', fig.cap = "Gráfico de dependencia de residuos para el proceso de orden cero. \\label{residuos.orden.0}", fig.dim = c(5,3.33), message=FALSE}
+ggplot(modelo.orden.0, aes(x = tiempo, y = .resid)) +
+  geom_point() +
+  stat_smooth(method = "loess", se = FALSE, span = 1, method.args = list(degree = 1)) +
+  geom_hline(yintercept = 0) +
+  labs(x = "Día", y = "Residuos de Concentración [%]")
+```
+
+El gráfico anterior muestra que la posición de la distribución los residuos para cada día no es cero. Por lo tanto, a diferencia de lo que se concluyó en el análisis visual, el ajuste de orden 0 no es adecuado para este conjunto de datos.
+
+### Proceso de Orden 1
+Si el proceso de degradación es de **orden 1**, la ecuación que lo describe es
+
+\begin{center} $C_t = C_0 e^{- kt}$ \end{center} 
+
+donde, nuevamente, $C_0$ es la *concentración inicial*. Tomando logaritmos naturales en ambos miembros de la expresión anterior, resulta
+
+\begin{center} $ln(C_t) = ln(C_0)- kt$ \end{center}
+
+De esta forma, la relación entre el logaritmo natural de la concentración del principio activo y el tiempo es lineal. El gráfico de la Figura \ref{scatterplot.orden.1} muestra la representación gráfica de este tipo de proceso.
+
+\vspace{3mm}
+
+```{r modelo.orden.1, echo=TRUE}
+datos.cinetica <- datos.cinetica %>%
+  mutate(lnc = log(cc))
+
+modelo.orden.1 <- lm(lnc~tiempo, data = datos.cinetica) %>% augment()
+```
+
+```{r scatterplot.orden.1, echo=TRUE, fig.align = 'center', fig.cap = "Concentración del logaritmo natural del principio activo en función del día. \\label{scatterplot.orden.1}", fig.dim = c(5,3.33), message=FALSE}
+ggplot(datos.cinetica, aes(x = tiempo, y = lnc)) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE) +
+  labs(x = "Día", y = "Logaritmo natural de Concenctración [ln(%)]")
+```
+
+Este segundo modelo parece ajustarse mucho mejor a los datos (transformados). Para evaluar este ajuste se construye el gráfico de dependencia de residuos de la Figura \ref{residuos.orden.1}.
+
+\vspace{3mm}
+
+```{r residuos.orden.1, echo=TRUE, fig.align = 'center', fig.cap = "Gráfico de dependencia de residuos para el proceso de orden uno. \\label{residuos.orden.1}", fig.dim = c(4.6,3.067), message=FALSE}
+ggplot(modelo.orden.1, aes(x = tiempo, y = .resid)) +
+  geom_point() +
+  stat_smooth(method = "loess", se = FALSE, span = 1, method.args = list(degree = 1)) +
+  geom_hline(yintercept = 0) +
+  labs(x = "Día", y = "Residuos de ln(C) [ln(%)]")
+```
+
+El gráfico anterior muestra que, en principio, el modelo de orden 1 ajusta bien a los datos transformados, ya que la posición de la distribución de los residuos no depende del día y están centrados en cero.
+
+Para evaluar la homogeneidad de los residuos se elabora el gráfico s-l que se muestra en la Figura \ref{sl.orden.1}. En este gráfico puede observarse un desplazamiento hacia abajo de la raíz cuadrada de los errores absolutos a medida que aumenta el valor ajustado del $ln(C)$ por el modelo.
+
+\vspace{3mm}
+
+```{r sl.orden.1, echo=TRUE, fig.align = 'center', fig.cap = "Gráfico s-l de los residuos para el proceso de orden uno. \\label{sl.orden.1}", fig.dim = c(4.6,3.067), message=FALSE}
+ggplot(modelo.orden.1, aes(x = .fitted, y = sqrt(abs(.resid)))) +
+  geom_point() +
+  stat_smooth(method = "loess", se = FALSE, span = 1, method.args = list(degree = 1)) +
+  labs(x = "Valores Ajustados de ln(C)", y = "Raíz Cuadrada Residuos Abs. de ln(C)")
+```
+
+En la Figura 7 se grafican boxplots de los residuos utilizando *slicing*. Nuevamente se puede observar que la dispersión de los residuos no es constante, es decir, los residuos no son homocedásticos.
+
+\vspace{3mm}
+
+```{r slicing.orden.1, echo=TRUE, fig.align = 'center', fig.cap = "Slicing de los residuos del proceso de orden uno. \\label{slicing.orden.1}", fig.dim = c(4.5,3), warning=FALSE} 
+equal_count <- function(vble, n_int, frac = 0.5) {
+  lattice::equal.count(vble, n_int, frac) %>% 
+  levels() %>% 
+  sapply(function(x) x) %>% 
+  t() %>% 
+  as_tibble() %>% 
+  setNames(c("inf", "sup")) %>% 
+  mutate(n = row_number())}
+
+n_int <- 5
+intervalos <- equal_count(modelo.orden.1$.resid, n_int)
+
+for (i in 1:n_int) {
+    lims <- as.numeric(intervalos[i, 1:2])
+    modelo.orden.1 <- mutate(modelo.orden.1,
+    !!paste0("int", i) := cut(modelo.orden.1$.resid,breaks = lims, labels = i))}
+
+data_graf <- 
+  modelo.orden.1 %>% 
+  pivot_longer(cols = starts_with("int"), names_to = "nombre", values_to = "intervalo") %>% 
+  select(-nombre) %>% 
+  mutate(intervalo = factor(as.numeric(intervalo))) %>% 
+  filter(!is.na(intervalo))
+
+ggplot(data_graf, aes(x = intervalo, y = .resid)) +
+    geom_boxplot(fill = "lightblue") + 
+    geom_hline(yintercept = 0, lty = 2) +
+    coord_flip() +
+    labs(x = "Intervalo de slicing", y = "Residuos Modelo Orden 1")
+```
+
+Por otro lado, en el gráfico anterior también se ve como la posición de los residuos varía junto con la dispersión. En este caso, los residuos aumentan con la disminución del valor ajustado (las mediciones quedaban ordenadas de manera decreciente), algo que no se apreciaba en el gráfico de la Figura \ref{residuos.orden.1}.
+
+Para evaluar la normalidad de los residuos se construye el QQ Normal de la Figura \ref{normal.orden.1}. A partir del mismo puede suponerse que los residuos se distribuyen normalmente. 
+
+\vspace{3mm}
+
+```{r normal.orden.1, echo=TRUE, fig.align = 'center', fig.cap = "Gráfico QQ Normal para los residuos del proceso de orden uno. \\label{normal.orden.1}", fig.dim = c(4.5,2.8), message=FALSE}
+ggplot(modelo.orden.1, aes(sample = .resid)) + stat_qq(size = 1.5) +
+  stat_qq_line(color="blue", size = 1)  +  labs(x="Cuantil normal", y="Residuo [ln(%)]")
+```
+
+Finalmente, se elabora el gráfico r-f de la Figura \ref{rf.orden.1}.
+
+\vspace{3mm}
+
+```{r rf.orden.1, echo=TRUE, fig.align = 'center', fig.cap = "Gráfico r-f para el proceso de orden uno. \\label{rf.orden.1}", fig.dim = c(4.5,2.8), message=FALSE}
+gg_rf(modelo.orden.1, lnc, .fitted, .resid, cen_obs = T) +
+labs(x = "Valor f", y = "ln(C) [ln(%)]")
+```
+
+En el gráfico se observa que la dispersión de la distribución de los residuos es menor que la de los valores ajustados (la cual es prácticamente nula), lo cual indica que el ajuste explica gran parte de la variabilidad de los datos.
+
+### Proceso de Orden 2
+Si el proceso de degradación es de **orden 2**, la ecuación que lo describe es
+
+\begin{center} $\displaystyle C_t = \frac{C_0}{1+C_0 kt}$ \end{center} 
+
+donde, como antes, $C_0$ es la *concentración inicial*. Trabajando algebraicamente la expresión anterior se obtiene que
+
+\begin{center} $\displaystyle \frac{1}{C_t} = \frac{1}{C_0} + kt$ \end{center}
+
+De esta forma, la relación entre el el recíproco de la concentración del principio activo y el tiempo es lineal.
+
+El gráfico de la Figura \ref{scatterplot.orden.2} muestra la representación gráfica de este tipo de proceso.
+
+\vspace{3mm}
+
+```{r modelo.orden.2, echo=TRUE}
+datos.cinetica <- datos.cinetica %>%
+  mutate(rc = 1/cc)
+
+modelo.orden.2 <- lm(rc~tiempo, data = datos.cinetica) %>% augment()
+```
+
+```{r scatterplot.orden.2, echo=TRUE, fig.align = 'center', fig.cap = "Concentración del recíproco del principio activo en función del día. \\label{scatterplot.orden.2}", fig.dim = c(4.5,3), message=FALSE}
+ggplot(datos.cinetica, aes(x = tiempo, y = rc)) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE) +
+  labs(x = "Día", y = "Recíproco Concentración [1/%]") +
+  theme(legend.position="none")
+```
+
+Para evaluar la calidad del ajuste de este modelo se construye el gráfico de dependencia de residuos de la Figura \ref{residuos.orden.2}.
+
+\vspace{3mm}
+
+```{r residuos.orden.2, echo=TRUE, fig.align = 'center', fig.cap = "Gráfico de dependencia de residuos para el proceso de orden dos. \\label{residuos.orden.2}", fig.dim = c(4.5,3), message=FALSE}
+ggplot(modelo.orden.2, aes(x = tiempo, y = .resid)) +
+  geom_point() +
+  stat_smooth(method = "loess", se = FALSE, span = 1, method.args = list(degree = 1)) +
+  geom_hline(yintercept = 0) +
+  labs(x = "Día", y = "Residuos Recíproco Concentración [1/%]") +
+  theme(legend.position="none")
+```
+
+Al igual que lo que sucedía con el modelo de orden 0, el gráfico anterior muestra una dependencia entre la posición de la distribución de los residuos y el día. Es decir, el ajuste no es bueno.
+
+### Conclusión
+De los tres modelos analizados, el que mejor ajusta a los datos o a alguna transformación de ellos es el de *orden 1*. A pesar de esto, no puede dejar de mencionarse que los residuos de un modelo lineal que responda a un proceso de orden 1 no verifican todos los supuestos sobre los cuales se construye este modelo. En particular, la homogeneidad de variancia de los residuos es la que no se estaría verificando. Aun así, el gráfico r-f de la Figura \ref{rf.orden.1} mostró que el modelo lineal que describe el proceso de orden 1 describe casi la totalidad de la variabilidad de los datos.
+
+## Estimación de los Parámetros del Modelo
+En el apartado anterior se concluyó que el proceso era de orden 1. La ecuación que lo describe, por lo tanto, es
+
+\begin{center} $C_t = C_0 e^{- kt}$ \end{center} 
+
+o bien, en forma logarítimica
+
+\begin{center} $ln(C_t) = ln(C_0)- kt$ \end{center}
+
+Se transformaron lo datos y se los ajustó por medio de una regresión lineal, obteniendo que
+
+```{r modelo.cinética, echo=FALSE}
+modelo.cinética <- lm(lnc~tiempo, data = datos.cinetica)
+```
+
+\begin{center} $ln(C_t) = $ `r round(modelo.cinética[["coefficients"]][["(Intercept)"]],3)` $-$ `r round(abs(modelo.cinética[["coefficients"]][["tiempo"]]),3)`$t$ \end{center}
+
+De esta forma, el valor puntual de la constante de velocidad *k* es
+
+\begin{center} $k = $ `r round(abs(modelo.cinética[["coefficients"]][["tiempo"]]),3)` \end{center}
+
+### Elaboración del Medicamento
+Si se asume que la degradación del principio activo del medicamento sigue el mismo comportamiento fuera del intervalo para el cual fue construido el modelo, entonces puede obtenerse la fecha en la cual fue elaborado el medicamento por medio de extrapolación lineal.
+
+Conocidos $C_0$, *k* y $C_t$, el tiempo puede calcularse de la siguiente manera
+
+\begin{center} $\displaystyle t = \frac{1}{k} ln \left ( \frac{C_t}{C_0} \right )$ \end{center}
+
+Tomando $C_t =$ 1.5% (concentración que informa la etiqueta), se tiene que
+
+\begin{center} $t =$ `r round(log(1.5/exp(modelo.cinética[["coefficients"]][["(Intercept)"]]))/modelo.cinética[["coefficients"]][["tiempo"]],3)` \end{center}
+
+Esto significa que, según el modelo utilizado, desde el fecha de fabricación del medicamento hasta el inicio del experimento transcurrieron aproximadamente 5 días.
+
+### Vida Media del Medicamento
+La *vida media* del medicamento es el tiempo que debe transcurrir para que la concentración del principio activo disminuya a la mitad de lo declarado en la etiqueta.
+
+Tomando $C_t =$ 0.75% en la expresión del apartado anterior se obtiene que
+
+\begin{center} $t =$ `r round(log(0.75/exp(modelo.cinética[["coefficients"]][["(Intercept)"]]))/modelo.cinética[["coefficients"]][["tiempo"]],3)` \end{center}
+
+Esto es, la vida media del medicamento es aproximadamente 19 días (teniendo en cuenta los 5 días que pasaron desde que se elaboró el medicamento hasta que comenzó el experimento).
+
+**Observación:** Para un proceso de orden 1, la vida media del medicamento es constante e independiente de la concentración inicial. Es el *tiempo que demora en disminuir la concentración del principio activo a la mitad* y pude obtenerse como
+
+\begin{center} $ln \left( \frac{1}{2} C_0 \right) = ln(C_0)- kt$ \end{center}
+
+\begin{center} $ln \left( \frac{1}{2} C_0 \right) - ln(C_0) = kt$ \end{center}
+
+\begin{center} $ln \left( \frac{\frac{1}{2} C_0}{C_0} \right) = kt$ \end{center}
+
+\begin{center} $ln \left( \frac{1}{2} \right) = kt$ \end{center}
+
+\begin{center} $\displaystyle t = \frac{1}{k} ln \left ( \frac{1}{2} \right )$ \end{center}
+
+Como puede verse en la expresión anterior, el tiempo *t* es independiente de la concentración. Solo depende de la constante de velocidad. Para el caso que se está estudiando resulta
+
+\begin{center} $t =$ `r round(log(0.5)/modelo.cinética[["coefficients"]][["tiempo"]],3)` \end{center}
+
+Es decir, aproximadamente 19 días.
+
+\break
+
+# PROBLEMA 2
+## Introducción
+Los datos que se analizan corresponden a un estudio sobre el *punto de Krafft* o *temperatura Krafft* de un grupo de compuestos químicos llevado a cabo por Jalali-Heravi y Knouz en el 2002. El **objetivo** del estudio era *encontrar una ecuación predictiva del punto de Krafft*.
+
+```{r datos.krafft, include=FALSE}
+datos.krafft <- read_delim(here("punto_krafft.txt"), "\t", escape_double = FALSE, trim_ws = TRUE)
+```
+
+Se considera solo un predictor de punto de Kraff: el calor o entalpía de formación del compuesto (*heat*). El grupo de datos está formado por un total de `r length(datos.krafft$heat)` mediciones del calor de formación y la temperatura Krafft de diferentes compuestos químicos. En la Tabla 2 se resumen estas mediciones para las dos variables.
+
+\vspace{3mm}
+
+```{r tabla.resumen.krafft, echo=FALSE}
+tabla.resumen.krafft <- summary(datos.krafft)
+
+knitr::kable(tabla.resumen.krafft, format = "pandoc", align = "c", caption = "Resumen de las mediciones del estudio para las variables analizadas.", col.names = c("Calor de Formación", "Punto de Krafft [ºC]"))
+```
+
+## Distribución de los Datos
+Para poder estudiar como varía la temperatura Krafft de los distintos compuestos se construye el diagrama de dispersión de la Figura \ref{scatterplot.krafft}.
+
+\vspace{3mm}
+
+```{r scatterplot.krafft, echo=TRUE, fig.align = 'center', fig.cap = "Temperatura Krafft de los compuestos en función del calor de formación. \\label{scatterplot.krafft}", fig.dim = c(4.5,3)}
+ggplot(datos.krafft, aes(x = heat, y = Krafft)) +
+  geom_point() +
+  labs(x = "Calor de Formación", y = "Temperatura Krafft [ºC]")
+```
+
+En este diagrama pueden observarse que, si se considera la totalidad de las mediciones, la relación entre el calor de formación y el punto de Krafft de los compuestos no parece ser lineal. Más aun, los puntos se concentran en tres grupos dependiendo del calor de formación: menos de 285 (aproximadamente entre 280 y 290), de 285 a 350 y más de 350. En la Figura \ref{scatterplot.krafft.2} se muestran los puntos según estos grupos.
+
+\vspace{3mm}
+
+```{r datos.scatterplot.krafft.2, echo=FALSE}
+krafft.grupos <- datos.krafft %>% 
+  mutate(grupo = NA)
+
+for (i in 1:length(krafft.grupos$heat)) {
+  if (krafft.grupos$heat[i] < 285) {
+    krafft.grupos$grupo[i] <- 1
+    } else if (krafft.grupos$heat[i] > 350) {
+      krafft.grupos$grupo[i] <- 3
+    } else {
+      krafft.grupos$grupo[i] <- 2
+  }
+}
+
+krafft.grupos$grupo <- as.character(krafft.grupos$grupo)
+```
+
+```{r scatterplot.krafft.2, echo=TRUE, fig.align = 'center', fig.cap = "Temperatura Krafft de los compuestos en función del calor de formación (por grupos). \\label{scatterplot.krafft.2}", fig.dim = c(4.5,3)}
+ggplot(krafft.grupos, aes(x = heat, y = Krafft, color = grupo)) +
+  geom_point() +
+  geom_vline(xintercept = 285, lty = 2) + geom_vline(xintercept = 350, lty = 2) +
+  labs(x = "Calor de Formación", y = "Temperatura Krafft [ºC]") +
+  theme(legend.position="none")
+```
+
+Agrupados de esta manera, a los puntos rojos y a los verdes del diagrama de la Figura \ref{scatterplot.krafft.2} podrían ajustarse (por separado) una recta de regresión lineal simple. Los tres puntos azules pueden corresponder a valores atípicos o a un grupo de compuestos para los cuales no se analizó suficientes muestras.
+
+## Estimación Robusta: Método MM
+Los **estimadores MM** fueron introducidos por Victor Yohai en 1987[^1]. Su cálculo combina los procedimientos de otros dos estimadores, los *estimadores M de escala* y los *estimadores S de regresión*, por lo que tienen simultáneamente la propiedad de ser altamente eficientes (en el caso de que los errores de regresión se distribuyan normalmente) y poseer un alto punto de ruptura. Debido a estas características, son una buena alternativa a la estimación de mínimos cuadrados (EMC) en el caso que las observaciones presenten datos atípicos.
+
+[^1]: Yohai, V. J. (1987). High breakdown-point and high efficiency robust estimates for regression. *The Annals of Statistics, 15(20)*, pp.642-656.
+
+El **punto de ruptura** de un estimador $\widehat{\theta}$ de un parámetro $\theta$ es la proporción de datos atípicos que las observaciones de un muestra pueden contener de forma tal que $\widehat{\theta}$ todavía brinde información sobre $\theta$. Mientras mayor sea el punto de ruptura de un estimador, más *robusto* será ante la presencia de valores atípicos. En general, el valor máximo del punto de ruptura es menor o igual que 0.5. 
+
+En regresión lineal, los estimadores M y S son estimadores robustos que minimizan una función de los residuos, esto es, tienen la propiedad de minimizar una función objetivo que depende de los datos únicamente a través de los residuos.
+
+El **estimador M de escala** fue presentado por Peter Huber en 1964[^2]. Para una muestra de $n$ observaciones, formalmente se define como el vector $\boldsymbol{\widehat{\beta}}_M$ que es solución de la ecuación
+
+[^2]: Huber, P. J. (1964}. Robust estimation of a location parameter, *The Annals of Mathematical Statistics, 35*, pp.73-101.
+
+\begin{center} $\displaystyle \frac{1}{n} \sum_{i=1}^{n} \rho_0\left ( \frac{r_i}{\widehat{\sigma}} \right ) = \frac{1}{n} \sum_{i=1}^{n} \rho_0\left ( \frac{y_i - \mathbf{x'}\boldsymbol{\widehat{\beta}}_M}{\widehat{\sigma}} \right ) = b$ \end{center}
+
+donde  $\rho_0$ es una *función* $\rho$, $r_i = y_i - \mathbf{x'}\boldsymbol{\widehat{\beta}}_M$ representa el residuo estimado de la *i*-ésima observación, $\widehat{\sigma}$ es una estimación  del desvío estándar de los errores (por ejemplo, la mediana de la desviación absoluta -MAD-) y $b \in (0;1)$. Una *función* $\rho$ es una función que cumple una serie de propiedades particulares, como ser continua, definida positiva, monótona creciente, entre otras. A su derivada primera se la denomina *función* $\psi$. Una función $\rho$ muy popular es la *función bicuadrada*
+
+\begin{center} $\rho_B(u) = \left\{\begin{matrix} 3u^2 - 3u^4 + u^6 & \text{si } \left | u \right | \leq 1 \\  1 & \text{si } \left | u \right | \geq 1 \end{matrix}\right.$ \end{center}
+
+cuya derivada es
+
+\begin{center} $\psi_B(u) = \left\{\begin{matrix} 6u\left ( 1 - u^2 \right )^2 & \text{si } \left | u \right | \leq 1 \\  0 & \text{si } \left | u \right | \geq 1 \end{matrix}\right.$ \end{center}
+
+El estimador M es una extensión del método de *estimación máximo verosímil* (de allí deriva su nombre). Si $\widehat{\beta}_M$ es un estimador M, entonces se verifica que es insesgado, asintóticamente normal y además es el de mínima variancia entre todos los estimadores insesgados. Más aun, al ser un estimador robusto, se comporta bien ante la presencia de outleirs en la variable de respuesta, pero no es resistente a la presencia de estos valores en alguna (o algunas) de las variables explicativas.
+
+El **estimador S de regresión** fue introducido por Peter Rousseeuw y Victor Yohai en 1984[^3]. Está asociado al estimador M de escala, ya que se basa en la escala de los residuos de este último (de ahí proviene su nombre -S de *scale*-). Se define como el vector $\boldsymbol{\widehat{\beta}}_S$ que minimiza la escala $\widehat{\sigma}_S$, donde $\widehat{\sigma}_S$ es el estimador M de escala de los residuos $\mathbf{r}$.
+
+[^3]: Rousseeuw, P. J. & Yohai, V. (1984). Robust Regression by Means of S Estimators in Robust and Nonlinear Time Series Analysis. En Franke, J., Härdle, W. & Martin, R. D. (eds.), *Lecture Notes in Statistics (Vol. 26, pp.256-274)*.New York: Springer-Verlag.
+
+Los estimadores S tienen la particularidad de que no pueden ser simultáneamente robustos y eficientes bajo modelos normales. A pesar de esto, tienen la importante ventaja de poder calcularse directamente a partir de los datos sin necesidad de estimadores iniciales de regresión ni dispersión
+
+A partir de estos estimadores y con el objetivo de conseguir eficiencia alta para estimadores con punto de ruptura alto, Yohai propone los **estimadores MM** (estimador M de regresión combinado con un estimador M de dispersión). Estos estimadores combinan las propiedades de estabilidad y
+eficiencia de los estimadores anteriores. Formalmente, un estimador MM $\boldsymbol{\widehat{\beta}}_n$ satisface la expresión
+
+\begin{center} $\displaystyle \frac{1}{n} \sum_{i=1}^{n} \psi_1\left ( \frac{y_i - \mathbf{x'}\boldsymbol{\widehat{\beta}}_n}{\widehat{\sigma}_n} \right ) \mathbf{x}_i= b$ \end{center}
+
+donde $\psi_1 (u) = \frac{\partial \rho_1 (u)}{\partial u}$ y siendo $\widehat{\sigma}_n$ un estimador S de regresión, es decir, $\widehat{\sigma}_n$ minimiza la estimación M $\widehat{\sigma}_n(\mathbf{\beta})$ definida por la ecuación
+
+\begin{center} $\displaystyle \frac{1}{n} \sum_{i=1}^{n} \rho_0\left ( \frac{y_i - \mathbf{x'}\boldsymbol{\widehat{\beta}}}{\widehat{\sigma}_n(\mathbf{\beta})} \right ) = b$ \end{center}
+
+Las funciones $\rho_0$ y $\rho_1$ determinan el punto de quiebre y la eficiencia del estimador, respectivamente.
+
+La obtención de este tipo de estimadores se realiza en tres etapas:
+
+1. En primer lugar, se considera un estimador inicial $\widehat{\beta}_0$ con alto punto de ruptura.
+
+2. Luego, a partir de los residuos del ajuste anterior, se obtiene un estimador de escala $\widehat{\sigma}$ con un punto de ruptura de 0.5.
+
+3. Finalmente, se define el estimador MM de los parámetros de la regresión como la estimación $\widehat{\beta}$ que minimice la función $S \left ( \widehat{\beta} \right )$ y además satisfaga $S \left ( \widehat{\beta} \right ) \leq S \left ( \widehat{\beta}_0 \right )$, donde 
+
+\begin{center} $\displaystyle S \left ( \widehat{\beta} \right ) = \sum_{i=1}^{n} \rho\left ( \frac{r_i \left ( \widehat{\beta} \right )}{\widehat{\sigma}} \right )$ \end{center}
+
+Con las primeras dos etapas se busca conseguir un punto de ruptura alto, mientras que en la tercer etapa se busca obtener eficiencia.
+
+## Ajuste de los Datos
+Se propone ajustar a los datos una regresión lineal simple utilizando tres métodos diferentes para estimar los parámetros del modelo:
+
+1. Mínimos Cuadrados Ordinarios (MCO).
+
+2. Método Bicuadrado.
+
+3. Estimación MM.
+
+En los tres casos el modelo lineal que se plantea es
+
+\begin{center} $y_i = \beta_0 + \beta_1x_i + \varepsilon_i, \ i=1,\text{...},32$ \end{center}
+
+donde $x_i$ e $y_i$ representan el calor de formación y el respectivo punto de Kraff de la observación *i*,  $\beta_0$ y $\beta_1$ son los coeficientes de regresión y $\varepsilon_i$ es el error aleatorio de la observación *i*.
+
+Para cada método de estimación, las ecuaciones de las rectas resultan
+
+\vspace{3mm}
+
+```{r modelos.krafft, echo=TRUE}
+modelo.mco <- lm(Krafft~heat, data = datos.krafft)
+modelo.bicuadrado <- rlm(Krafft~heat, data = datos.krafft, psi = psi.bisquare)
+modelo.mm <- lmRob(Krafft~heat, data = datos.krafft)
+```
+
+\begin{center} MCO: $y_i =$ `r round(modelo.mco[["coefficients"]][["(Intercept)"]],3)` $-$ `r abs(round(modelo.mco[["coefficients"]][["heat"]],3))`$x_i, \ i=1,\text{...},32$ \end{center}
+
+\begin{center} Bicuadrado: $y_i =$ `r round(modelo.bicuadrado[["coefficients"]][["(Intercept)"]],3)` $-$ `r abs(round(modelo.bicuadrado[["coefficients"]][["heat"]],3))`$x_i, \ i=1,\text{...},32$ \end{center}
+
+\begin{center} MM: $y_i = -$`r abs(round(modelo.mm[["coefficients"]][["(Intercept)"]],3))` $+$ `r round(modelo.mm[["coefficients"]][["heat"]],3)`$x_i, \ i=1,\text{...},32$ \end{center}
+
+En la Figura \ref{graficos.modelos.krafft} se grafican las rectas de regresión estimadas con los tres métodos en el mismo diagrama de dispersión.
+
+\vspace{3mm}
+
+```{r graficos.modelos.krafft, echo=TRUE, fig.align = 'center', fig.cap = "Temperatura Krafft de los compuestos en función del calor de formación. \\label{graficos.modelos.krafft}", fig.dim = c(6,3.5), message = FALSE}
+ggplot(datos.krafft, aes(x = heat, y = Krafft)) +
+  geom_point() +
+  stat_smooth(method = "lm", se = FALSE, aes(color = "MCO"))  + 
+  stat_smooth(method = "rlm", se = FALSE, method.args = list(psi = psi.bisquare),
+              aes(color = "Bicuadrado")) + 
+  stat_smooth(method = "lmRob", se = FALSE, aes(color = "MM")) +
+  scale_color_discrete("Método de Estimación") +
+  labs(x = "Calor de Formación", y = "Temperatura Krafft [ºC]")
+```
+
+En caso de las rectas estimadas con MCO y el Método Bicuadrado, las mismas intentan contener puntos tanto en la zona central como en los extremos. Ambas rectas buscan incluir el "centro" de estos tres grupos (imaginarios) de datos. Resulta interesante que el ajuste por medio del método bicuadrado produzca una recta con coeficientes muy similares a la obtenida por MCO. Probablemete la distribución tan particular de los puntos sea la que dificulte la detección de outliers o valores extremos y por eso los resultados obtenidos con estos dos métodos sean tan semejantes.
+
+Por su parte, la recta estimada con Estimación MM le da mucho peso a los valores centrales y poco o ninguno a las mediciones de los extremos. Por este motivo es que la recta se ajusta muy bien a las mediciones de calor de formación en el intervalo de 285 a 350, pero fuera de esos valores se aleja notablemente de los puntos.
+
+En la Figura \ref{dependencia.residuos.krafft} se muestran los gráficos de residuos para cada uno de estos tres ajustes.
+
+\vspace{3mm}
+
+```{r residuos.krafft, echo=FALSE}
+residuos.mco <- modelo.mco %>% augment()
+residuos.bicuadrado <- modelo.bicuadrado %>% augment()
+residuos.mm <- datos.krafft %>%
+  mutate(.fitted = modelo.mm$fitted.values, .resid = modelo.mm$residuals)
+```
+
+```{r dependencia.residuos.krafft, echo=TRUE, fig.align = 'center', fig.cap = " Gráfico de dependencia de residuos para la estimación por cada método: a) MCO; b) Bicuadrado; y c) MM. \\label{dependencia.residuos.krafft}", fig.dim = c(6,4), message=FALSE}
+res.mco <- ggplot(residuos.mco, aes(x = heat, y = .resid)) +
+  geom_point() +
+  stat_smooth(method = "loess", se = FALSE, span = 1, method.args = list(degree = 1)) +
+  geom_hline(yintercept = 0) +
+  labs(x = "Día", y = "Residuos")
+
+res.bi <- ggplot(residuos.bicuadrado, aes(x = heat, y = .resid)) +
+  geom_point() +
+  stat_smooth(method = "loess", se = FALSE, span = 1, method.args = list(degree = 1)) +
+  geom_hline(yintercept = 0) +
+  labs(x = "Día", y = "Residuos")
+
+res.mm <- ggplot(residuos.mm, aes(x = heat, y = .resid)) +
+  geom_point() +
+  stat_smooth(method = "loess", se = FALSE, span = 1, method.args = list(degree = 1)) +
+  geom_hline(yintercept = 0) +
+  labs(x = "Día", y = "Residuos")
+
+plot_grid(res.mco, res.bi, res.mm, labels = c('a', 'b', 'c'))
+```
+Como se puede observar en los gráficos a) y b), los residuos de las rectas obtenidas por MCO y Bicuadrado reproducen la estructura que tenían los datos originales. Por su parte, el gráfico c) muestra que la recta obtenida por Estimación MM ajusta muy bien los valores centrales, pero sobrestima y subestima los valores del punto Krafft para calores de formación fuera del intervalo (285;350).
+
+Finalmente, en la Figura \ref{rf.krafft} se muestran los gráficos rf para los tres ajustes. En estos gráficos se observa que los ajustes por MCO y Bicuadrado no explican la variabilidad de los datos; el modelo no es bueno con estas estimaciones. En cuanto a la estimación MM, hay una mejora con respecto a los otros dos métodos. Esto se ve principalmente en los valores centrales, donde la valor f de los residuos disminuye y el del ajuste aumenta.
+
+\vspace{3mm}
+
+```{r rf.krafft, echo=TRUE, fig.align = 'center', fig.cap = " Gráfico rf para la estimación por cada método: a) MCO; b) Bicuadrado; y c) MM. \\label{rf.krafft}", fig.dim = c(6,8)}
+rf.mco <- gg_rf(residuos.mco, Krafft, .fitted, .resid, cen_obs = T) +
+labs(x = "Valor f", y = "Punto de Krafft")
+
+rf.bi <- gg_rf(residuos.bicuadrado, Krafft, .fitted, .resid, cen_obs = T) +
+labs(x = "Valor f", y = "Punto de Krafft")
+
+rf.mm <- gg_rf(residuos.mm, Krafft, .fitted, .resid, cen_obs = T) +
+labs(x = "Valor f", y = "Punto de Krafft")
+
+plot_grid(rf.mco, rf.bi, rf.mm, labels = c('a', 'b', 'c'), ncol=1)
+```
+
+### Comentarios sobre los Ajustes
+Maronna, Martin y Yohai (2006) sostienen que cuando un grupo de datos está compuesto por dos subgrupos lineales, un estimador robusto con alto punto de ruptura (como es el estimador MM) va a elegir ajustar una de las dos subestructuras lineales y la otra se va a poder descubrir en el análisis de los residuos. En cambio, un estimador no robusto (como es la estimación por MCO) va a intentar ajustar ambas subestructuras, logrando así que la existencia de las mismas pase desapercibida.
+
+Esto se puede observar en los gráficos de los residuos de la Figura \ref{dependencia.residuos.krafft}. Mientras que los residuos del ajuste por MCO aparentan estar centrados alrededor de cero, replican casi de forma exacta la distribución de los datos originales (excepto por el cambio de posición). El modelo no logra explicar el comportamiento de las mediciones. En cambio, con la estimación MM se obtiene un gráfico de residuos "peor" pero el modelo con estas estimaciones explica muy bien el comportamiento de una de las dos subestructuras lineales que contenían los datos.
+
+Los autores explican que esto es lo que el *exact fit property* asegura. Con una estimación robusta como la MM se ajusta la mayoría de las mediciones, mientras que con una estimación no robusta como la MCO no se ajusta ninguna.
+
+En cuanto al Método Bicuadrado, los resultados obtenidos son muy similares a las estimaciones por MCO, tal como se indicó en el apartado anterior.
+
+## Bibliografía
+Kudraszow, N. L. (2012). Estimadores de tipo MM para el modelo lineal multivariado (Tesis de Doctorado). Universidad Nacional de la Plata, Argentina.
+
+Liana, T., Pratiwi, H., Sulistijowati, S. & Susanti, Y. (2014). M estimation, S estimation and MM estimation in robust regresion. *International Journal of Pure and Applied Mathematics, 11(3)*, pp.349-360.
+
+Maronna, R. A., Martin, D. & Yohai, V. J. (2006). *Robust Statistics: Theory and Methods* (1st ed.). Estados Unidos: John Wiley & Sons.
+
+Salibian-Barrera, M. (2006). Bootstrapping MM-estimators for linear regression with fixed designs. *Statistics & Probability Letters, 76*, pp.1287–1297.
+
+Zamar, R.H. (1994). Estimación robusta. *Estadística Española, 36(137)*, pp.326-350.

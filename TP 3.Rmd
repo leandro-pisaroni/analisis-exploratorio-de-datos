@@ -1,0 +1,469 @@
+---
+title: \textbf{\huge{Trabajo Práctico 3}}
+subtitle: \huge Análisis de Datos Trivariados
+author: "Leandro Pisaroni"
+date: "`r format(Sys.time(), '%d de %B de %Y')`"
+
+output:
+  pdf_document:
+    toc: FALSE #Génera el índice
+    toc_depth: 3 #Cantidad de niveles que muestra el índice
+    number_sections: TRUE #Numera las secciones automáticamente
+    keep_tex: FALSE #No elimina el archivo de Latex después de compilar
+
+lang: es-ar #Idioma
+
+header-includes:
+  - \usepackage{graphicx} #Para incluir las imágenes
+  - \usepackage{lastpage}
+  - \usepackage[labelfont=bf]{caption} #Pone en negrita las etiquetas de las Tablas y Figuras
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhead[L]{\emph{Análisis Exploratorio de Datos}}
+  - \fancyhead[R]{Maestría en Estadística Aplicada}
+  - \fancyfoot{} #Elimina el número de página que por defecto pone RMarkdown
+  - \fancyfoot[L]{\textbf{Trabajo Práctico 3} - Leandro Pisaroni}
+  - \fancyfoot[R]{Página \thepage \hspace{1pt} de \pageref{LastPage}}
+  - \fancypagestyle{plain}{\pagestyle{fancy}}
+  - \renewcommand{\headrulewidth}{0.5pt}
+  - \renewcommand{\footrulewidth}{0.5pt}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r paquetes, include=FALSE}
+library(MASS) #Cargar antes de dplyr -> Ajustes Robustos
+
+library(ggplot2) #Paquetes de gráficos
+library(ggrepel)
+library(GGally) #Matrices de diagramas de dispersión
+library(rgl) #Gráficos en 3D
+library(plotly)
+library(egg) #Para juntar varios gráficos con ggarrange
+library(cowplot)
+#library(ggridges)
+#library(gganimate)
+
+library(readr) #Paquetes para carga de datos
+library(here)
+library(dplyr) #Paquete para manipulación de datos
+library(tidyr)
+
+library(broom) #Paquete para convertir modelos y ajustes en datasets
+
+library(ggcleveland) # devtools::install_github("mpru/ggcleveland")
+library(robust) #Estimación robusta
+
+library(png) #Paquete para poder incluir gráficos png con knitr::include_graphics
+```
+
+# Introducción
+Los datos que se analizan corresponden a un estudio sobre el proceso de remoción de plomo de soluciones acuosas utilizando cascarilla de pistacho (*pistacia vera L.*) como adsorbente. En el mismo se consideraron dos variables explicativas: el **pH inicial** (pH) de la solución y la **concentración inicial de plomo** (Pb). El **objetivo** del estudio era *explicar la dependencia del porcentaje de remoción de plomo* (R) *en las variables explicativas* y, además, *estimar la correspondiente superficie de respuesta*.
+
+```{r datos, include=FALSE}
+datos <- read_csv(here("plomo.csv"))
+```
+
+Para la variable pH se definieron 6 niveles equiespaciados: 2, 2.7, 3.4, 4.1, 4.8 y 5.5; mientras que para Pb se utilizaron 4 niveles (también equiespaciados): 5, 20, 35 y 50 ppm. Para cada combinación de estas variables se replicó el experimento dos veces. De esta forma, el grupo de datos está compuesto por un total de `r length(datos$R)` observaciones de la remoción de plomo.
+
+# Análisis Exploratorio de los Datos
+En la Figura \ref{matriz.dispersion} se muestra la matriz de diagramas de dispersión de los datos que se estudian.
+
+\vspace{3mm}
+
+```{r matriz.dispersion, echo=TRUE, fig.align = 'center', fig.cap = "Matriz de diagramas de dispersión para el estudio de adsorción de plomo. \\label{matriz.dispersion}", fig.dim = c(6,4)}
+ggpairs(datos, columns = 1:3, axisLabels = "internal",
+        columnLabels = c("pH", "Concentración Pb \n [ppm]", "Remoción [%]"))
+```
+
+En el primer panel de la segunda fila (pH-Pb) se puede observar el diseño experimental que se utilizó. Se ven claramente definidas las 24 combinaciones entre los niveles de pH y las concentraciones iniciales de plomo de las soluciones estudiadas. Debido a este diseño, no se aprecia correlación entre las variables explicativas.
+
+Por otro lado, en el primer panel de la última fila (pH-R) se observa que existe una relación creciente entre el pH inicial de la solución y el porcentaje de remoción. Esta relación parece alcanzar una máximo para un pH de entre 4 y 5, punto a partir del cual comienza a disminuir el porcentaje de plomo adsorbido.
+
+Finalmente, en el segundo panel de la última fila (Pb-R) se ve un leve aumento del porcentaje de remoción para concentraciones iniciales de plomo más elevadas. 
+
+En la Figura \ref{diagrama.3d} se muestra el gráfico de dispersión tridimensional de los porcentajes de remoción de plomo en función del pH y la concentración inicial de las soluciones. Para facilitar al visualización se presentan distintas perspectivas de este gráfico.
+
+\vspace{3mm}
+
+```{r diagrama.3d.creacion, eval=FALSE, message=TRUE, warning=TRUE, echo=TRUE}
+plot3d(x = datos$pH, y = datos$Pb, z = datos$R, size = 6, col = "blue",
+       xlab = "pH", ylab = "Concentracion Pb [ppm]", zlab = "Remocion [%]")
+```
+
+```{r diagrama.3d, echo=FALSE, fig.align = 'center', fig.cap = "Diagrama de dispersion tridimensional del estudio de adsorción de plomo. \\label{diagrama.3d}", out.width="75%"}
+knitr::include_graphics(here("grafico_3d.png"))
+```
+
+En esta figura se puede observar con mayor detalle que la remoción de plomo aumenta con la concentración inicial de esta sustancia y el pH de la solución hasta alcanzar un máximo en esta última variable alrededor de los 4 o 5 puntos de pH y luego comenzar a disminuir nuevamente.
+
+Con el objetivo de poder describir mejor el comportamiento de la variable de respuesta y su relación con las variables explicativas, se estudia la dependencia condicional de la primera a través de coplots (*conditioning plots*) para cada variable.
+
+En la Figura \ref{coplot.pH} se muestra el coplot del porcentaje de remoción versus la concentración inicial de plomo condicionado por el pH inicial de la solución. Teniendo en cuenta que esta última variable solo puede tomar 6 valores (en función del diseño experimental), se construye un coplot para cada uno de estos niveles de pH.
+
+\vspace{3mm}
+
+```{r coplot.pH, echo=TRUE, fig.align = 'center', fig.cap = "Coplot del procentaje de remoción (R) versus la concentración inicial de plomo (Pb) condicionado por el pH inicial de la solución (pH). \\label{coplot.pH}", fig.dim = c(6,4), warning=FALSE, message=FALSE}
+gg_coplot(datos, x = Pb, y = R, faceting = pH,
+          number_bins = 6, overlap = 0,
+          ylabel = "Remoción [%]",
+          xlabel = "Concentración Pb [ppm]",
+          facetlabel = "pH",
+          loess_family = "s", size = 2)
+```
+
+Excepto para el panel correspondiente a pH = 4.8 -panel (2,2)-, en cada uno de los demás paneles condicionados se pueden observar comportamientos muy parecidos del porcentaje de remoción: el mismo aumenta a medida que se incrementa la concentración hasta alrededor de 20 ppm, luego comienza a disminuir hasta una concentración de 35 ppm para finalmente volver a crecer.
+
+Para el caso del coplot correspondiente a un pH de 4.8 se observan diferencias con el resto de los niveles de pH para los niveles más bajos de concentración, pero no para los dos mayores. Como se trata de pocas observaciones, en lugar de descartar por completo la idea de que no existe interacción entre las variables pH y Pb, se avanza con el estudio de los coplots condicionados por esta última variable para poder decidir sobre la interacción. Es posible que los puntos que generan problema en cuestión hayan estado afectados por alguna otra variable que no se controló o estén sujetos a algún tipo de error de medición.
+
+En la Figura \ref{coplot.Pb} se muestra el coplot del procentaje de remoción versus el pH inicial de la solución condicionado por la concentración inicial de plomo [^1]. Al igual que para la variable anterior, nuevamente se tiene en cuenta que debido al diseño experimental Pb solo puede tomar 4 valores, por lo que se construye un coplot para cada una de estas concentraciones.
+
+[^1]: El límite inferior del primer intervalo (-2.5 ppm) es resultado del *algoritmo de conteos iguales* y no corresponde a algún valor observado. Es decir, ese número no significa que las soluciones pueden tomar concentraciones negativas de plomo, ya que eso no tiene sentido.
+
+\vspace{3mm}
+
+```{r coplot.Pb, echo=TRUE, fig.align = 'center', fig.cap = "Coplot del procentaje de remoción (R) versus el pH inicial de la solución (pH) condicionado por la concentración inicial de plomo (Pb). \\label{coplot.Pb}", fig.dim = c(6,4), warning=FALSE, message=FALSE}
+gg_coplot(datos, x = pH, y = R, faceting = Pb,
+          number_bins = 4, overlap = 0,
+          ylabel = "Remoción [%]",
+          xlabel = "pH",
+          facetlabel = "Concentración Pb [ppm]",
+          loess_family = "s", size = 2)
+```
+
+En cada panel condicionado se pueden observar comportamientos muy similares del porcentaje de remoción en función de variaciones del pH inicial de la solución: el porcentaje aumenta de manera lineal con el aumento en el pH hasta alrededor de los 4 puntos y, a partir de este valor, disminuye muy levemente. Esto es lo mismo que se pudo ver en el diagrama de dispersión correspondiente de la Figura \ref{matriz.dispersion}.
+
+Este comportamiento apoya lo que se vio en el coplot anterior, donde los indicios de existencia de interacción entre las variables explicativas eran muy pocos o casi nulos. Por lo tanto, se asume que no hay interacción entre las variables pH y Pb.
+
+# Ajuste de los Datos
+En el apartado anterior se pudo dar una respuesta inicial al objetivo del estudio. En lo que sigue se propone encontrar una superficie que se ajuste a las mediciones realizadas. Esta superficie se obtendrá por dos métodos:
+
+1. Utilizando un ajuste *loess*.
+
+2. Por medio de un ajuste paramétrico.
+
+## Ajuste LOESS
+En primer lugar se utiliza un ajuste loess para poder estimar la superficie de respuesta.
+
+\vspace{3mm}
+
+```{r ajuste.loess, message=TRUE, warning=TRUE}
+ajuste.loess <- loess(R ~ pH * Pb, datos, span = 1/2, degree = 2, family = "s")
+```
+
+En la Figura \ref{superficie.loess} se muestra la superficie que representa el porcentaje de remoción de plomo en función del pH y concentración inicial de Pb de la solución ajustada utilizando loess.
+
+\vspace{3mm}
+
+```{r superficie.loess.creacion, message=FALSE, warning=FALSE, eval=FALSE, echo=TRUE}
+grilla.grafico <- expand.grid(
+  Pb = seq(min(datos$Pb), max(datos$Pb), length = 6),
+  pH = seq(min(datos$pH), max(datos$pH), length = 6))
+
+grilla.loess <- predict(ajuste.loess, grilla.grafico)
+
+plot_ly(data = datos,
+        x = unique(grilla.grafico$pH),
+        y = unique(grilla.grafico$Pb),
+        z = grilla.loess,
+        type = "surface") %>%
+  add_markers(data = datos, x = ~pH, y = ~Pb, z = ~R, size = 1.5) %>%
+  layout(
+    scene = list(
+      xaxis = list(title = "pH"),
+      yaxis = list(title = "Concentración [ppm]"),
+      zaxis = list(title = "Remoción [%]"),
+      dragmode = "turntable"))
+```
+
+```{r superficie.loess, echo=FALSE, fig.align = 'center', fig.cap = "Superficie loess con dos factores ajustada utilizando polinomios de segundo grado. \\label{superficie.loess}", out.width="75%"}
+knitr::include_graphics(here("ajuste_loess.png"))
+```
+
+Para una mejor comprensión de la superficie de respuesta, se acompaña la figura anterior con los coplots del porcentaje de remoción de plomo ajustado condicionado por cada una de las variables explicativas.
+
+\vspace{3mm}
+
+```{r coplot.loess.Pb, echo=TRUE, fig.align = 'center', fig.cap = "Coplot del procentaje de remoción ajustado con loess versus el pH inicial de la solución condicionado por la concentración inicial de plomo . \\label{coplot.loess.Pb}", fig.dim = c(6,4)}
+grilla.datos <- crossing(
+  pH = seq(min(datos$pH), max(datos$pH), length = 6),
+  Pb = seq(min(datos$Pb), max(datos$Pb), length = 4)) %>%
+  mutate(ajustado.loess = predict(ajuste.loess, .))
+ggplot(grilla.datos, aes(x = pH, y = ajustado.loess)) +
+  facet_wrap(~ factor(Pb, labels = paste("Pb =",sort(unique(round(grilla.datos$Pb, 4))))),
+             nrow = 2) +
+  geom_line(color="blue", size=1) +
+  labs(y = "Remoción Ajustada [%]", x = "pH")
+```
+
+```{r coplot.loess.pH, echo=TRUE, fig.align = 'center', fig.cap = "Coplot del procentaje de remoción ajustado con loess versus la concentración inicial de plomo condicionado por el pH inicial de la solución. \\label{coplot.loess.pH}", fig.dim = c(6,4)}
+ggplot(grilla.datos, aes(x = Pb, y = ajustado.loess)) +
+  facet_wrap(~ factor(pH, labels = paste("pH =",sort(unique(round(grilla.datos$pH, 6))))),
+             nrow = 2) +
+  geom_line(color="blue", size=1) +
+  labs(y = "Remoción Ajustada [%]", x = "Concentración Pb [ppm]")
+```
+
+Como se observa en la Figura \ref{coplot.loess.Pb}, en cada uno de los paneles las curvas que se visualizan son similares no solo en forma sino también en ubicación. Esto indica que, para este ajuste, el porcentaje de remoción de plomo no varía de forma significativa con la concentración inicial de plomo de la solución.
+
+En cambio, en los panales de la Figura \ref{coplot.loess.pH} sí se ve un marcado cambio en la posición de la curva a medida que se incrementa el pH inicial de la solución. De esta forma, para el ajuste loess, el pH es la variable que mayor influencia tiene sobre el porcentaje de remoción.
+
+### Análisis de los Residuos
+Para evaluar la calidad del ajuste anterior, se realiza una análisis de los residuos del modelo. En la Figura \ref{dependencia.loess} se muestran los gráficos de dependencia de los residuos para cada una de las variables explicativas.
+
+\vspace{3mm}
+
+```{r dependencia.loess, echo=TRUE, fig.align = 'center', fig.cap = "Gráficos de dependencia de residuos para el ajuste loess: a) Residuos del modelo versus el pH inicial de la solución; b) Residuos del modelo en función de la concentración inicial de plomo [ppm] en la solución. \\label{dependencia.loess}", fig.dim = c(6,3.5), message=FALSE}
+datos$residuo.loess <- residuals(ajuste.loess)
+
+res.l.1 <- ggplot(datos, aes(x = pH, y = residuo.loess)) +
+  geom_point() + geom_hline(yintercept = 0) +
+  stat_smooth(method = "loess", se = FALSE, span = 1,
+              method.args = list(degree = 1, family = "s")) +
+  labs(x = "pH", y = "Residuos Remoción [%]")
+res.l.2 <- ggplot(datos, aes(x = Pb, y = residuo.loess)) +
+  geom_point() + geom_hline(yintercept = 0) +
+  stat_smooth(method = "loess", se = FALSE, span = 1,
+              method.args = list(degree = 1, family = "s")) +
+  labs(x = "Concentracion Pb [ppm]", y = "Residuos Remoción [%]")
+ggarrange(res.l.1, res.l.2, ncol = 2, labels =c('a','b'))
+```
+
+En ninguno de los dos gráficos se observa una dependencia de los residuos con alguna de las variables y, además, los puntos se encuentran centrados alrededor de cero. De todas formas, existen algunos puntos para los cuales el ajuste loess produce residuos mucho más grandes (en valor absoluto) que el resto.
+
+Con el objetivo de estudiar más en profundidad la posible dependencia remanente de los residuos con alguna de las variables, se realizan coplots de los mismos condicionados por el pH y la concentración inicial de Pb. Estos gráficos se muestran en las Figuras \ref{coplot.residuo.loess.pH} y \ref{coplot.residuo.loess.Pb}.
+
+\vspace{3mm}
+
+```{r coplot.residuo.loess.pH, echo=TRUE, fig.align = 'center', fig.cap = "Coplot de los resiudos del ajuste loess versus la concentración inicial de plomo condicionado por el pH inicial de la solución. \\label{coplot.residuo.loess.pH}", fig.dim = c(5,3.5), message=FALSE}
+gg_coplot(datos, x = Pb, y = residuo.loess, faceting = pH,
+          number_bins = 6, overlap = 0,
+          ylabel = "Residuos Remoción [%]",
+          xlabel = "Concentración Pb [ppm]",
+          facetlabel = "pH",
+          loess_span = 1, loess_family = "symmetric", hline_at = 0, size = 2)
+```
+
+```{r coplot.residuo.loess.Pb, echo=TRUE, fig.align = 'center', fig.cap = "Coplot de los resiudos del ajuste loess versus el pH inicial de la solución condicionado por la concentración inicial de plomo. \\label{coplot.residuo.loess.Pb}", fig.dim = c(5,3.5), message=FALSE}
+gg_coplot(datos, x = pH, y = residuo.loess, faceting = Pb,
+          number_bins = 4, overlap = 0,
+          ylabel = "Residuos Remoción [%]",
+          xlabel = "pH",
+          facetlabel = "Concentración Pb [ppm]",
+          loess_span = 1, loess_family = "symmetric", hline_at = 0, size = 2)
+```
+
+En los panales de la Figura \ref{coplot.residuo.loess.Pb} se observa que, en general, no hay dependencia entre los residuos y el pH inicial de la solución. En cambio, en la Figura \ref{coplot.residuo.loess.pH} se ve que en los paneles (1,2), (1,3) y (2,1) los puntos muestran cierta dependencia de los residuos con la concentración inicial de plomo.
+
+En el caso del panel (1,3), correspondiente a un pH = 3.4, la pendiente negativa en el patrón subyacente de los puntos puede deberse a la subestimación del modelo con respecto a las mediciones. En los gráficos de la Figura \ref{dependencia.loess} las dos observaciones con los mayores residuos positivos corresponden a puntos de este panel.
+
+Por otro lado, para el panel (1,2), el cual corresponde a un valor de pH de 2.7, la marcada pendiente positiva en el patrón de los puntos se debe, en gran parte, a la observación que en los gráficos de la Figura \ref{dependencia.loess} tenía el mayor residuo (en valor absoluto) negativo. Algo similar sucede con los puntos del panel (2,1), con un pH = 4.1, donde el modelo también sobrestima las observaciones.
+
+Avanzando con el análisis de los residuos, se construye el gráfico s-l de la Figura \ref{sl.residuo.loess} para evaluar la homogeneidad de los mismos.
+
+\vspace{3mm}
+
+```{r sl.residuo.loess, echo=TRUE, fig.align = 'center', fig.cap = "Gráfico s-l para los residuos del ajuste loess. \\label{sl.residuo.loess}", fig.dim = c(6,4), message=FALSE}
+datos$ajuste.loess <- fitted(ajuste.loess)
+
+ggplot(datos, aes(x = ajuste.loess, y = sqrt(abs(residuo.loess)))) +
+  geom_point() +
+  stat_smooth(method = "loess", se = FALSE, span = 2, method.args = list(degree = 1)) +
+  labs(x = "Remoción Ajustada [%]",
+  y = "Raiz Cuadrada Residuos Absolutos Remoción [%^0.5]")
+```
+
+En el gráfico anterior se ajusta una curva loess para visualizar mejor el comportamiento de los puntos, la cual tiene una pendiente levemente positiva. Analizando un poco más en profundidad los puntos anteriores (agrupándolos por pH y concentración inicial de plomo) se comprueba que este efecto es posible que se deba al mismo grupo de mediciones que ocasionaban problemas en los gráficos de dependencia de residuos. Como se trata de una pendiente leve y pocas observaciones, la magnitud del efecto es pequeño para pensar que existe una dispersión monótona.
+
+Finalmente, se construye el gráfico QQ normal de la Figura \ref{normal.residuo.loess}. En el mismo se observa una ligera asimetría en el sentido de los valores grandes de los residuos. A pesar de esto, no se descarta que los residuos se distribuyan normalmente. 
+
+\vspace{3mm}
+
+```{r normal.residuo.loess, echo=TRUE, fig.align = 'center', fig.cap = "Gráfico QQ Normal de los residuos para el ajuste loess. \\label{normal.residuo.loess}", fig.dim = c(6,4)}
+ggplot(datos, aes(sample = residuo.loess)) +
+  stat_qq() +
+  stat_qq_line(color="blue", size=1)
+```
+
+## Ajuste Paramétrico
+También se ajustan los datos anteriores utilizando el siguiente modelo paramétrico
+
+\begin{center}$z_{ij} = a + bx_i + cy_j + dx^2_i + ey^2_j + \varepsilon_{ij}, \ i=1,\text{...},6, \ j=1,\text{...},4$ \end{center}
+
+donde $z_{ij}$ es el porcentaje de remoción de plomo para el *i*-ésimo nivel de pH inicial ($x_i$) y la *j*-ésima concentración inicial de plomo ($y_j$),  $a,\text{...},e$ son los coeficientes de regresión y $\varepsilon_{ij}$ es el término de error aleatorio de la medición correspondiente al *i*-ésimo valor de pH y *j*-ésima concentración de Pb.
+
+\vspace{3mm}
+
+```{r ajuste.parametrico}
+ajuste.parametrico <- lm(R ~ pH + Pb + I(pH^2) + I(Pb^2), data = datos)
+```
+
+Se tiene entonces que
+
+\begin{center}$z_{ij} = -87\text{.}539 + 73\text{.}776x_i - 0\text{.}053y_j - 8\text{.}216x^2_i + 0\text{.}007y^2_j + \varepsilon_{ij}$ \end{center}
+
+Respecto del modelo anterior se hacen los siguientes comentarios:
+
+1. Como en el análisis exploratorio se determinó que no había interacción entre las variables pH y Pb, o por lo menos que esta interacción era muy leve o casi nula, no se incorpora al modelo el término de interacción[^2].
+
+[^2]: Si se la interacción al modelo, se estiman los coeficientes y se evalúa si el correspondiente a ese término es distinto de cero o no, se concluye a favor de que el mismo es nulo. Esto soporta lo que se observó por medio de los coplots de las Figuras \ref{coplot.pH} y \ref{coplot.Pb}: no hay interacción entre las variables explicativas.
+
+2. Por otro lado, como ninguno de los porcentajes de remoción de plomo aparenta ser un *outlier* los coeficientes del modelo se estiman por medio de *mínimos cuadrados ordinarios* (MCO) y no se utiliza algún método de estimación robusta[^3].
+
+[^3]: Si se duda de la posible existencia de outliers y se utiliza la función **rlm()** para estimar los coeficientes del modelo por medio de algún método de estimación robusta (como puede ser un *M-estimador* o un *MM-estimador*), los valores y residuos que se obtienen son muy similares a los calculados por medio de la función **lm()** (MCO).
+
+En la Figura \ref{superficie.parametrica} se muestra la gráfica de la superficie obtenida por medio del ajuste paramétrico anterior.
+
+\vspace{3mm}
+
+```{r superficie.parametrica.construccion, warning=FALSE, message=FALSE, eval=FALSE, echo=TRUE}
+grilla.parametrica <- grilla.loess
+aux <- predict(ajuste.parametrico,grilla.grafico)
+
+for (i in 1:6) {
+  grilla.parametrica[,i] <- aux[(6*i-5):(6*i)]
+}
+
+plot_ly(data = datos,
+        x = unique(grilla.grafico$pH),
+        y = unique(grilla.grafico$Pb),
+        z = grilla.parametrica,
+        type = "surface") %>%
+  add_markers(data = datos, x = ~pH, y = ~Pb, z = ~R, size = 1.5) %>%
+  layout(
+    scene = list(
+      xaxis = list(title = "pH"),
+      yaxis = list(title = "Concentración [ppm]"),
+      zaxis = list(title = "Remoción [%]"),
+      dragmode = "turntable"))
+```
+
+```{r superficie.parametrica, echo=FALSE, fig.align = 'center', fig.cap = "Superficie del modelo paramétrico de segundo grado sin interacción entre las variables pH y Pb. \\label{superficie.parametrica}", out.width="70%"}
+knitr::include_graphics(here("ajuste_parametrico.png"))
+```
+
+Tal como se hizo para el ajuste loess, para poder comprender mejor la superficie de respuesta, se acompaña la figura anterior con los coplots del porcentaje de remoción de plomo ajustado condicionado por cada una de las variables explicativas.
+
+\vspace{3mm}
+
+```{r coplot.parametrico.Pb, echo=TRUE, fig.align = 'center', fig.cap = "Coplot del procentaje de remoción ajustado con un modelo paramétrico versus el pH inicial de la solución condicionado por la concentración inicial de plomo . \\label{coplot.parametrico.Pb}", fig.dim = c(6,4)}
+grilla.datos <- grilla.datos %>%
+  mutate(ajustado.par = predict(ajuste.parametrico, .))
+
+ggplot(grilla.datos, aes(x = pH, y = ajustado.par)) +
+  facet_wrap(~ factor(Pb, labels = paste("Pb =",sort(unique(round(grilla.datos$Pb, 4))))),
+             nrow = 2) +
+  geom_line(color="blue", size=1) +
+  labs(y = "Remoción Ajustada [%]", x = "pH")
+```
+
+```{r coplot.parametrico.pH, echo=TRUE, fig.align = 'center', fig.cap = "Coplot del procentaje de remoción ajustado con un modelo paramétrico versus la concentración inicial de plomo condicionado por el pH inicial de la solución. \\label{coplot.parametrico.pH}", fig.dim = c(6,4)}
+ggplot(grilla.datos, aes(x = Pb, y = ajustado.par)) +
+  facet_wrap(~ factor(pH, labels = paste("pH =",sort(unique(round(grilla.datos$pH, 6))))),
+             nrow = 2) +
+  geom_line(color="blue", size=1) +
+  labs(y = "Remoción Ajustada [%]", x = "Concentración Pb [ppm]")
+```
+
+Lo primero que se observa en las Figuras \ref{coplot.parametrico.Pb} y \ref{coplot.parametrico.pH} es que, debido a que no se consideró la interacción entre pH y Pb, para cada variable, las curvas en cada uno de los panales condicionados son iguales entre sí. Lo única diferencia que se puede observar es en la posición pero no en la forma de las mismas.
+
+Respecto a los coplots de la Figura \ref{coplot.parametrico.Pb}, la ubicación de las curvas aumenta moderadamente. Esto indica que, para el ajuste paramétrico, el porcentaje de remoción de plomo es poco sensible a la variación en la concentración inicial de plomo de la solución.
+
+Por otro lado, en los paneles de la Figura \ref{coplot.parametrico.pH} se observa lo mismo que se pudo ver en el ajuste loess: un marcado cambio en la posición de la curva a medida que se incrementa el pH inicial de la solución. De esta forma, para el ajuste paramétrico, nuevamente el pH es la variable que mayor influencia tiene sobre el porcentaje de remoción.
+
+### Análisis de los Residuos
+Para evaluar la calidad del ajuste paramétrico, se realiza una análisis de los residuos del modelo. En la Figura \ref{dependencia.parametrico} se muestran los gráficos de dependencia de los residuos para cada una de las variables explicativas.
+
+\vspace{3mm}
+
+```{r dependencia.parametrico, echo=TRUE, fig.align = 'center', fig.cap = "Gráficos de dependencia de residuos para el ajuste paramétrico: a) Residuos del modelo versus el pH inicial de la solución; b) Residuos del modelo en función de la concentración inicial de plomo [ppm] en la solución. \\label{dependencia.parametrico}", fig.dim = c(6,3.5), message=FALSE}
+datos$residuo.par <- residuals(ajuste.parametrico)
+
+res.p.1 <- ggplot(datos, aes(x = pH, y = residuo.par)) +
+  geom_point() + geom_hline(yintercept = 0) +
+  stat_smooth(method = "loess", se = FALSE, span = 1,
+              method.args = list(degree = 1, family = "s")) +
+  labs(x = "pH", y = "Residuos Remoción [%]")
+
+res.p.2 <- ggplot(datos, aes(x = Pb, y = residuo.par)) +
+  geom_point() + geom_hline(yintercept = 0) +
+  stat_smooth(method = "loess", se = FALSE, span = 1,
+              method.args = list(degree = 1, family = "s")) +
+  labs(x = "Concentracion Pb [ppm])", y = "Residuos Remoción [%]")
+
+ggarrange(res.p.1, res.p.2, ncol = 2, labels =c('a','b'))
+```
+
+En ninguno de los dos gráficos se observa una dependencia de los residuos con alguna de las variables y, además, los puntos se encuentran centrados alrededor de cero. A pesar de esto, existen algunos puntos para los cuales el ajuste paramétrico produce residuos mucho más grandes (en valor absoluto) que el resto.
+
+Con el objetivo de estudiar más en profundidad la posible dependencia remanente de los residuos con alguna de las variables, se realizan coplots de los mismos condicionados por el pH y la concentración inicial de Pb. Los mismos se muestran en las Figuras \ref{coplot.residuo.parametrico.pH} y \ref{coplot.residuo.parametrico.Pb}.
+
+\vspace{3mm}
+
+```{r coplot.residuo.parametrico.pH, echo=TRUE, fig.align = 'center', fig.cap = "Coplot de los resiudos del ajuste paramétrico versus la concentración inicial de plomo condicionado por el pH inicial de la solución. \\label{coplot.residuo.parametrico.pH}", fig.dim = c(5,3.5), message=FALSE}
+gg_coplot(datos, x = Pb, y = residuo.par, faceting = pH,
+          number_bins = 6, overlap = 0,
+          ylabel = "Residuos Remoción [%]",
+          xlabel = "Concentración Pb [ppm]",
+          facetlabel = "pH",
+          loess_span = 1, loess_family = "symmetric", hline_at = 0, size = 2)
+```
+
+```{r coplot.residuo.parametrico.Pb, echo=TRUE, fig.align = 'center', fig.cap = "Coplot de los resiudos del ajuste paramétrico versus el pH inicial de la solución condicionado por la concentración inicial de plomo. \\label{coplot.residuo.parametrico.Pb}", fig.dim = c(5,3.5), message=FALSE}
+gg_coplot(datos, x = pH, y = residuo.par, faceting = Pb,
+          number_bins = 4, overlap = 0,
+          ylabel = "Residuos Remoción [%]",
+          xlabel = "pH",
+          facetlabel = "Concentración Pb [ppm]",
+          loess_span = 1, loess_family = "symmetric", hline_at = 0, size = 2)
+```
+
+En los paneles de la Figura \ref{coplot.residuo.parametrico.Pb} se observa que, en general, no parece haber dependencia entre los residuos y el pH inicial de la solución. De todas formas, en los paneles (1,2) y (2,1) el modelo paramétrico estaría subestimando y sobrestimando, respectivamente, la mayoría de las mediciones.
+
+Por otro lado, en la Figura \ref{coplot.residuo.parametrico.pH} se ve que en los paneles (1,2) y (2,1) los puntos muestran cierta dependencia de los residuos con la concentración inicial de plomo. Además, en el panel (1,3) se ve claramente que subestima los porcentajes de remoción medidos para casi la totalidad de los puntos.
+
+En el caso del panel (1,2), el cual corresponde a un valor de pH de 2.7, la pendiente positiva en el patrón de los puntos se debe, en gran parte, a la observación que en los gráficos de la Figura \ref{dependencia.parametrico} tenía el mayor residuo (en valor absoluto). Algo similar sucede con los puntos del panel (2,1), con un pH = 4.1, donde el modelo también sobrestima en gran medida las observaciones.
+
+Avanzando con el análisis de los residuos, se construye el gráfico s-l de la Figura \ref{sl.residuo.parametrico} para evaluar la homogeneidad de los mismos.
+
+\vspace{3mm}
+
+```{r sl.residuo.parametrico, echo=TRUE, fig.align = 'center', fig.cap = "Gráfico s-l para los residuos del ajuste paramétrico. \\label{sl.residuo.parametrico}", fig.dim = c(6,4), message=FALSE}
+datos$ajuste.par <- fitted(ajuste.parametrico)
+
+ggplot(datos, aes(x = ajuste.par, y = sqrt(abs(residuo.par)))) +
+  geom_point() +
+  stat_smooth(method = "loess", se = FALSE, span = 2, method.args = list(degree = 1)) +
+  labs(x = "Remoción Ajustada [%]",
+  y = "Raiz Cuadrada Residuos Absolutos Remoción [%^0.5]")
+```
+
+En el gráfico anterior se ajusta una curva loess para visualizar mejor el comportamiento de los puntos, la cual tiene una pendiente casi nula. De esta forma, se puede pensar que los residuos para este modelo son homogéneos.
+
+Finalmente, se construye el gráfico QQ normal de la Figura \ref{normal.residuo.parametrico}. En el mismo se observa una ligera asimetría en el sentido de los valores grandes de los residuos. A pesar de esto, no se descarta que los residuos se distribuyan normalmente. 
+
+\vspace{3mm}
+
+```{r normal.residuo.parametrico, echo=TRUE, fig.align = 'center', fig.cap = "Gráfico QQ Normal de los residuos para el ajuste loess. \\label{normal.residuo.parametrico}", fig.dim = c(6,4)}
+ggplot(datos, aes(sample = residuo.par)) +
+  stat_qq() +
+  stat_qq_line(color="blue", size=1)
+```
+
+## Comparación entre los Métodos
+En el apartado anterior se ajustó el conjunto de mediciones utilizando un ajuste loess y uno paramétrico.
+
+Lo primero que se observa es que, para ambos ajustes, las superficies que se obtuvieron en las Figuras \ref{superficie.loess} y \ref{superficie.parametrica} son muy parecidas. Inclusive los coplots de las Figuras \ref{coplot.loess.Pb}, \ref{coplot.loess.pH}, \ref{coplot.parametrico.Pb} y \ref{coplot.parametrico.pH} describen comportamientos similares. La principal diferencia se puede observar en los coplots condicionados por concentración inicial de plomo: para el ajuste loess (Figura \ref{coplot.loess.Pb}) se ve un ligero cambio en la forma de la curva, mientras que para el ajuste paramétrico (Figura \ref{coplot.parametrico.Pb}) esto no sucede. Eso se debe a que en el modelo paramétrico no se incluyó el término de interacción, porque su efecto era casi nulo.
+
+Con respecto a los residuos de cada modelo, se puede decir lo siguiente:
+
+1. Los gráficos de dependencia de residuos de las Figuras \ref{dependencia.loess} y \ref{dependencia.parametrico} son similares.
+En ambos modelos no parece haber dependencia de los residuos con las variables explicativas. De todas formas, mirando los coplots de las Figuras \ref{coplot.residuo.loess.Pb} y \ref{coplot.residuo.parametrico.Pb} se observa que el modelo paramétrico tiende a sobrestimar y subestimar los porcentajes de remoción de plomo medidos en mayor proporción que el ajuste loess.
+
+2. Respecto a la homogeneidad, los gráficos s-l de las Figuras \ref{sl.residuo.loess} y \ref{sl.residuo.parametrico} muestran que para ambos modelos los residuos pueden considerarse homogéneos. De todas formas, los residuos del modelo paramétricos parecen comportarse mejor que los del ajuste loess.
+
+3. Finalmente, en cuanto a la normalidad, en los gráficos QQ normales de las Figuras \ref{normal.residuo.loess} y \ref{normal.residuo.parametrico} se observa que para los dos ajustes es posible considerar que los residuos se distribuyen normalmente, con una ligera asimetría en el sentido de los valores grandes.
+
+En conclusión, para los datos analizados, el desempeño de los dos tipos de ajustes es semejante. De tener que seleccionar uno de los dos para trabajar, el modelo paramétrico permitió obtener una expresión analítica para la relación entre el pH de la solución y la concentración inicial de plomo con su porcentaje de remoción y por ese motivo puede ser más útil y conveniente.
